@@ -1,12 +1,14 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QStackedWidget
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QPoint
 from PySide6.QtGui import QPainterPath, QRegion
 
+import math
 from views.title_bar import TitleBar
 from services.theme_service import theme_service
 from views.home_view import HomeView
 from views.detail_view import DetailPlayerView
 from models.data_manager import DataManager
+from views.widgets.theme_animation_widget import ThemeAnimationWidget
 
 class MainWindow(QWidget):
     def __init__(self, controller):
@@ -47,8 +49,11 @@ class MainWindow(QWidget):
         self.stack.addWidget(self.detail_view)
         
         theme_service.theme_changed.connect(self._apply_theme)
+        # self._apply_theme(theme_service.get_theme()) # 初始主题在 TitleBar 中已经触发了一次 apply_theme，但 MainWindow 也需要设置一次
         self._apply_theme(theme_service.get_theme())
         self.move_to_center()
+        
+        self.theme_animation_widget = None
     
     def _apply_theme(self, theme):
         bg_main = theme['bg_main']
@@ -62,6 +67,46 @@ class MainWindow(QWidget):
         """)
         self.layout().setContentsMargins(shadow_margin, shadow_margin, shadow_margin, shadow_margin)
         self._apply_shadow()
+
+    def start_theme_animation(self, pos):
+        if self.theme_animation_widget:
+            return
+            
+        # 1. 捕捉当前窗口内容的截图 (旧状态)
+        # 捕捉整个 content_widget，因为阴影边缘在 MainWindow 布局中
+        pixmap = self.grab()
+        old_image = pixmap.toImage()
+        
+        # 2. 切换主题 (触发各组件重绘为新状态)
+        theme_service.toggle_theme()
+        
+        # 3. 创建并启动动画挂件 (叠加在窗口上方，显示旧状态并逐渐揭开新状态)
+        self.theme_animation_widget = ThemeAnimationWidget(self)
+        self.theme_animation_widget.setGeometry(self.rect())
+        self.theme_animation_widget.old_window_background = old_image
+        self.theme_animation_widget.center = pos
+        
+        # 计算结束半径 (覆盖整个窗口所需的最大距离)
+        corners = [
+            QPoint(0, 0),
+            QPoint(self.width(), 0),
+            QPoint(0, self.height()),
+            QPoint(self.width(), self.height())
+        ]
+        max_dist = 0
+        for corner in corners:
+            dist = math.sqrt((pos.x() - corner.x())**2 + (pos.y() - corner.y())**2)
+            if dist > max_dist:
+                max_dist = dist
+        
+        self.theme_animation_widget.end_radius = max_dist
+        self.theme_animation_widget.animationFinished.connect(self._on_theme_animation_finished)
+        
+        # 启动动画
+        self.theme_animation_widget.start_animation(700)
+    
+    def _on_theme_animation_finished(self):
+        self.theme_animation_widget = None
     
     def _apply_shadow(self):
         if self.isMaximized():

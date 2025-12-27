@@ -19,7 +19,7 @@ class TitleBar(QWidget):
         self.btn_theme = QPushButton()
         self.btn_theme.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_theme.setFixedSize(32, 32)
-        self.btn_theme.clicked.connect(theme_service.toggle_theme)
+        self.btn_theme.clicked.connect(self._on_theme_clicked)
         self.layout.addWidget(self.btn_theme)
         
         self.divider = QFrame()
@@ -66,6 +66,16 @@ class TitleBar(QWidget):
         """)
         
         self.btn_theme.setText("🌙" if theme["name"] == "light" else "☀")
+
+    def _on_theme_clicked(self):
+        # 将点击位置转换为 MainWindow 的坐标
+        pos = self.btn_theme.mapTo(self.window(), self.btn_theme.rect().center())
+        # 触发 MainWindow 的动画
+        if hasattr(self.window(), "start_theme_animation"):
+            self.window().start_theme_animation(pos)
+        else:
+            # 回退方案
+            theme_service.toggle_theme()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
