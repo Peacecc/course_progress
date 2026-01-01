@@ -1,8 +1,36 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QFrame, QSizePolicy)
-from PySide6.QtCore import Qt, Signal, QSize, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QColor, QIcon, QCursor
+from PySide6.QtCore import Qt, Signal, QSize, QPropertyAnimation, QEasingCurve, QRect
+from PySide6.QtGui import QColor, QIcon, QCursor, QFontMetrics, QPainter
 from  services.theme_service import theme_service as theme_manager
+
+class ElidedLabel(QLabel):
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self._elided_text = text
+
+    def setText(self, text):
+        self._elided_text = text
+        self.setToolTip(text)
+        super().setText(text)
+        self.update()
+
+    def minimumSizeHint(self):
+        # 核心：返回极小的最小尺寸提示，允许布局将其压缩
+        return QSize(20, self.fontMetrics().height())
+
+    def sizeHint(self):
+        # 提供一个合理的建议宽度，但允许被压缩
+        return QSize(100, self.fontMetrics().height())
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        metrics = QFontMetrics(self.font())
+        # 确保计算省略文本时考虑当前标签宽度
+        elided = metrics.elidedText(self._elided_text, Qt.TextElideMode.ElideRight, self.width())
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        # 垂直居中绘制内容
+        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided)
 
 class VideoItemWidget(QFrame):
     clicked = Signal(object) # video_data
@@ -17,8 +45,8 @@ class VideoItemWidget(QFrame):
         self.is_hovered = False
         
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(15, 0, 15, 0)
-        layout.setSpacing(10)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(12)
         
         # Icon / Status
         self.icon_label = QLabel()
@@ -27,13 +55,15 @@ class VideoItemWidget(QFrame):
         
         # Title
         title_str = video_data["rel_path"].split("\\")[-1].split("/")[-1]
-        self.title_label = QLabel(title_str)
+        self.title_label = ElidedLabel(title_str)
         layout.addWidget(self.title_label, 1)
         
         # Duration
         duration_str = self.format_time(video_data.get("duration", 0))
         self.dur_label = QLabel(duration_str)
-        layout.addWidget(self.dur_label)
+        self.dur_label.setFixedWidth(50)
+        self.dur_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(self.dur_label, 0) # 明确不拉伸，固定在右侧
         
         theme_manager.theme_changed.connect(self.apply_theme)
         self.apply_theme(theme_manager.get_theme())
@@ -67,8 +97,8 @@ class VideoItemWidget(QFrame):
 
     def apply_theme(self, theme):
         self.current_theme = theme
-        self.title_label.setStyleSheet(f"font-size: 13px; color: {theme['text_main']};")
-        self.dur_label.setStyleSheet(f"color: {theme['text_sec']}; font-size: 12px;")
+        self.title_label.setStyleSheet(f"font-size: 13px; color: {theme['text_main']}; font-weight: 400;")
+        self.dur_label.setStyleSheet(f"color: {theme['text_sec']}; font-size: 11px;")
         self.refresh_style()
 
     def refresh_style(self):
@@ -78,17 +108,18 @@ class VideoItemWidget(QFrame):
         bg = "transparent"
         border = "none"
         
-        if self.is_selected:
+        # 统一样式：选中和悬浮使用相同的背景色，建立视觉连续性
+        if self.is_selected or self.is_hovered:
             bg = theme['bg_ter']
-            border = f"1px solid {theme['accent']}"
-        elif self.is_hovered:
-            bg = theme['bg_ter']
+            if self.is_selected:
+                # 即使背景统一，选中态依然保留明显的边框强调
+                border = f"1px solid {theme['accent']}"
             
         self.setStyleSheet(f"""
             VideoItemWidget {{
                 background-color: {bg};
                 border: {border};
-                border-radius: 4px;
+                border-radius: 8px;
             }}
         """)
 
@@ -115,6 +146,7 @@ class ChapterWidget(QWidget):
         
         # Content Area
         self.content_area = QWidget()
+        self.content_area.setObjectName("chapterContent")
         self.content_layout = QVBoxLayout(self.content_area)
         self.content_layout.setContentsMargins(15, 0, 0, 0) # Indent children
         self.content_layout.setSpacing(2)
@@ -139,12 +171,12 @@ class ChapterWidget(QWidget):
                 background-color: transparent;
                 color: {theme['text_main']};
                 font-weight: bold;
-                font-size: 14px;
-                padding: 8px 10px;
+                font-size: 13px;
+                padding: 10px 12px;
                 border: none;
+                border-radius: 8px;
             }}
             QPushButton:hover {{
                 background-color: {theme['bg_ter']};
-                border-radius: 4px;
             }}
         """)

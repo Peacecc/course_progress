@@ -19,6 +19,7 @@ class TitleBar(QWidget):
         self.btn_theme = QPushButton()
         self.btn_theme.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_theme.setFixedSize(32, 32)
+        self.btn_theme.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.btn_theme.clicked.connect(self._on_theme_clicked)
         self.layout.addWidget(self.btn_theme)
         
@@ -47,6 +48,7 @@ class TitleBar(QWidget):
     def create_nav_btn(self, text, slot, tooltip, is_close=False):
         btn = QPushButton(text)
         btn.setFixedSize(32, 32)
+        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         btn.setToolTip(tooltip)
         btn.clicked.connect(slot)
         if is_close: btn.setObjectName("btnClose")
