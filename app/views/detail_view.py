@@ -110,6 +110,7 @@ class DetailPlayerView(QWidget):
         
         # 核心播放容器
         self.video_container = QWidget()
+        self.video_container.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         self.video_container.setStyleSheet("background-color: black;")
         self.video_container.setMouseTracking(True)
         self.video_container.setCursor(Qt.CursorShape.ArrowCursor) # 确保是箭头
@@ -349,8 +350,13 @@ class DetailPlayerView(QWidget):
 
     def toggle_fullscreen(self):
         is_sidebar_visible = self.sidebar_panel.isVisible()
-        self.sidebar_panel.setVisible(not is_sidebar_visible)
-        self.header_widget.setVisible(not is_sidebar_visible)
+        new_visible = not is_sidebar_visible
+        self.sidebar_panel.setVisible(new_visible)
+        self.header_widget.setVisible(new_visible)
+        
+        # 模式切换后立即刷新样式以更新圆角
+        self.apply_theme(theme_service.get_theme())
+        
         # 全屏切换后立即重算坐标
         QTimer.singleShot(50, self.update_controls_geometry)
 
@@ -427,14 +433,22 @@ class DetailPlayerView(QWidget):
         return f"{h:02}:{m:02}:{s:02}" if h > 0 else f"{m:02}:{s:02}"
 
     def apply_theme(self, theme):
+        # 侧边栏始终保持左下圆角
         self.sidebar_panel.setStyleSheet(f"background-color: {theme['bg_sec']}; border-bottom-left-radius: 12px;") 
         self.header_widget.setStyleSheet(f"background-color: {theme['bg_sec']};")
         self.course_title.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {theme['text_main']};")
         self.back_btn.setStyleSheet(f"QPushButton {{ border: none; color: {theme['text_sec']}; font-weight: bold; font-size: 16px; }} QPushButton:hover {{ color: {theme['text_main']}; background-color: {theme['bg_ter']}; border-radius: 4px; }}")
         self.splitter.setStyleSheet(f"QSplitter::handle {{ background-color: {theme['border']}; }}")
+        
         if hasattr(self, 'list_scroll'):
             self.list_scroll.setStyleSheet(self._get_scrollbar_qss())
-        self.content_panel.setStyleSheet(f"background-color: {theme['bg_main']}; border-bottom-right-radius: 12px;")
+            
+        # 核心逻辑：沉浸模式下，视频区域需要左下圆角
+        is_immersive = not self.sidebar_panel.isVisible()
+        radius_left = "12px" if is_immersive else "0px"
+        
+        self.content_panel.setStyleSheet(f"background-color: {theme['bg_main']}; border-bottom-right-radius: 12px; border-bottom-left-radius: {radius_left};")
+        self.video_container.setStyleSheet(f"background-color: black; border-bottom-right-radius: 12px; border-bottom-left-radius: {radius_left};")
         
         nav_style = f"QPushButton {{ background-color: transparent; color: {theme['text_sec']}; border: 1px solid {theme['border']}; border-radius: 16px; font-weight: bold; }} QPushButton:checked {{ background-color: {theme['accent']}; color: white; border: none; }} QPushButton:hover {{ background-color: {theme['bg_ter']}; }}"
         self.nav_player_btn.setStyleSheet(nav_style)

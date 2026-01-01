@@ -58,8 +58,8 @@ class MainWindow(QWidget):
     def _apply_theme(self, theme):
         bg_main = theme['bg_main']
         border = theme['border']
-        border_radius = '0px' if self.isMaximized() else '10px'
-        shadow_margin = 0 if self.isMaximized() else 10
+        border_radius = '0px' if self.isMaximized() else '12px'
+        shadow_margin = 0 if self.isMaximized() else 12
         
         self.setStyleSheet(f"""
             MainWindow {{ background-color: transparent; }}
@@ -174,5 +174,5 @@ class MainWindow(QWidget):
         if self.isMaximized(): self.clearMask()
         else:
             path = QPainterPath()
-            path.addRoundedRect(0, 0, self.width(), self.height(), 10, 10)
+            path.addRoundedRect(0, 0, self.width(), self.height(), 12, 12)
             self.setMask(QRegion(path.toFillPolygon().toPolygon()))
