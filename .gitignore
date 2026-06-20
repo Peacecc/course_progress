@@ -16,5 +16,5 @@ debug/
 data/
 sdk/
 tools/download_fonts.py
-.vscode/settings.json
 .log
+
