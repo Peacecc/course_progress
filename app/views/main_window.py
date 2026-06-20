@@ -261,9 +261,13 @@ class MainWindow(QWidget):
                     on_top = rect.top() <= y < rect.top() + border
                     on_bottom = rect.bottom() - border < y <= rect.bottom()
 
-                    # 标题栏区域（允许拖拽）
+                    # 标题栏内部区域 — 排除所有边缘（允许窗口拖拽）
                     title_bottom = rect.top() + self.title_bar.height()
-                    if rect.top() <= y < title_bottom and on_left is False and on_right is False:
+                    in_title_inner = (
+                        rect.top() + border <= y < title_bottom
+                        and not on_left and not on_right and not on_top
+                    )
+                    if in_title_inner:
                         return super().nativeEvent(eventType, message)
 
                     # 边框区域 → 返回对应的 HT 值
