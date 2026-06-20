@@ -7,7 +7,6 @@ from PySide6.QtWidgets import (
     QGridLayout, QLabel, QFileDialog, QMessageBox, QProgressDialog,
 )
 from PySide6.QtCore import Qt, Signal, QThread
-from PySide6.QtGui import QCursor
 
 from views.widgets.course_card import CourseCard
 from views.widgets.home_dashboard import HomeDashboard
@@ -77,8 +76,10 @@ class HomeView(QWidget):
         self.grid_widget = QWidget()
         self.grid_widget.setStyleSheet("background: transparent;")
         self.grid_layout = QGridLayout(self.grid_widget)
-        self.grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.grid_layout.setSpacing(20)
+        for col in range(3):
+            self.grid_layout.setColumnStretch(col, 1)
 
         # 空状态提示
         self.empty_label = QLabel("📂 尚未添加课程\n点击右上角「+ 添加课程」开始")
@@ -202,10 +203,9 @@ class HomeView(QWidget):
                 lambda checked=False, cid=card_data.course_id: self.course_selected.emit(cid)
             )
 
-            # 右键菜单
-            card.setContextMenuPolicy(Qt.CustomContextMenu)
-            card.customContextMenuRequested.connect(
-                lambda pos, cid=card_data.course_id: self._show_context_menu(pos, cid)
+            # 删除课程
+            card.delete_requested.connect(
+                lambda cid=card_data.course_id: self._confirm_delete(cid)
             )
 
             row = idx // columns
@@ -275,15 +275,7 @@ class HomeView(QWidget):
         """课程名称编辑完成"""
         self.controller.update_course_name(course_id, new_name)
 
-    # ==================== 右键菜单 ====================
-
-    def _show_context_menu(self, pos, course_id: str):
-        from PySide6.QtWidgets import QMenu
-        menu = QMenu(self)
-        delete_action = menu.addAction("删除课程")
-        action = menu.exec(QCursor.pos())
-        if action == delete_action:
-            self._confirm_delete(course_id)
+    # ==================== 删除课程 ====================
 
     def _confirm_delete(self, course_id: str):
         reply = QMessageBox.question(

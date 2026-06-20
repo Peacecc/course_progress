@@ -1,62 +1,83 @@
 """课程卡片组件 — 首页课程库的课程卡片，显示进度、时长、余额等信息"""
 
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar, QLineEdit
-from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
+    QProgressBar, QLineEdit, QPushButton, QStackedWidget,
+)
+from PySide6.QtCore import Qt, Signal, Property, QPropertyAnimation, QEasingCurve, QTimer, QSize
+from PySide6.QtGui import QColor
 
 from services.theme_service import theme_service
 from utils.fonts import get_font
 
 
 class CourseCard(QWidget):
-    """课程卡片 — 展示单门课程的概览信息"""
+    """课程卡片 — 展示单门课程的概览信息，适配多列网格布局"""
 
     clicked = Signal()
-    name_changed = Signal(str)  # 课程名称编辑完成
+    name_changed = Signal(str)
+    delete_requested = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(210)
+        self.setFixedHeight(200)
+        self.setMinimumWidth(300)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self._course_id = ""
         self._current_theme = None
+        self._hover_progress = 0.0
 
         # ---- 主布局 ----
         self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(20, 16, 20, 16)
-        self.main_layout.setSpacing(14)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
 
-        # ---- 课程名称区域 ----
-        self.course_info_layout = QHBoxLayout()
-        self.course_info_layout.setSpacing(12)
-        self.course_info_layout.setContentsMargins(0, 0, 0, 0)
+        # ==================== 顶部强调色条 ====================
+        self.accent_bar = QWidget()
+        self.accent_bar.setFixedHeight(3)
+        self.main_layout.addWidget(self.accent_bar)
+
+        # ==================== 卡片内容区 ====================
+        content = QVBoxLayout()
+        content.setContentsMargins(18, 12, 14, 14)
+        content.setSpacing(10)
+
+        # ---- Row 0: 名称行 ----
+        name_row = QHBoxLayout()
+        name_row.setContentsMargins(0, 0, 0, 0)
+        name_row.setSpacing(8)
+
+        self.name_stack = QStackedWidget()
 
         self.course_name_label = QLabel("课程名称")
-        self.course_name_label.setFont(get_font("Bold", 15))
+        self.course_name_label.setFont(get_font("Bold", 14))
         self.course_name_label.setWordWrap(True)
-        self.course_name_label.setMaximumWidth(300)
-        self.course_info_layout.addWidget(self.course_name_label)
+        self.course_name_label.setMaximumWidth(240)
+        self.name_stack.addWidget(self.course_name_label)  # index 0
 
-        # 内联编辑框（默认隐藏）
         self.name_edit = QLineEdit()
-        self.name_edit.setVisible(False)
-        self.name_edit.setFont(get_font("Bold", 15))
-        self.name_edit.setMaximumWidth(300)
+        self.name_edit.setFont(get_font("Bold", 14))
+        self.name_edit.setMaximumWidth(240)
         self.name_edit.editingFinished.connect(self._on_name_edit_finished)
-        self.course_info_layout.addWidget(self.name_edit)
+        self.name_stack.addWidget(self.name_edit)  # index 1
 
-        self.course_info_layout.addStretch()
-        self.main_layout.addLayout(self.course_info_layout)
+        name_row.addWidget(self.name_stack)
+        name_row.addStretch()
 
-        # ---- 进度条区域 ----
-        self.progress_layout = QVBoxLayout()
-        self.progress_layout.setSpacing(8)
-        self.progress_layout.setContentsMargins(0, 0, 0, 0)
+        self.delete_btn = QPushButton("\U0001F5D1")
+        self.delete_btn.setFixedSize(26, 26)
+        self.delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.delete_btn.setToolTip("删除课程")
+        self.delete_btn.clicked.connect(self._on_delete_clicked)
+        name_row.addWidget(self.delete_btn)
 
-        self.progress_label = QLabel("进度: 0%")
-        self.progress_label.setFont(get_font("Regular", 11))
-        self.progress_layout.addWidget(self.progress_label)
+        content.addLayout(name_row)
+
+        # ---- Row 1: 进度条 + 百分比（同行） ----
+        progress_row = QHBoxLayout()
+        progress_row.setContentsMargins(0, 0, 0, 0)
+        progress_row.setSpacing(10)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedHeight(8)
@@ -64,106 +85,92 @@ class CourseCard(QWidget):
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(False)
-        self.progress_layout.addWidget(self.progress_bar)
+        progress_row.addWidget(self.progress_bar, 1)  # stretch=1：占满剩余空间
 
-        self.main_layout.addLayout(self.progress_layout)
+        self.progress_pct_label = QLabel("0%")
+        self.progress_pct_label.setFont(get_font("Bold", 16))
+        self.progress_pct_label.setFixedWidth(48)
+        self.progress_pct_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        progress_row.addWidget(self.progress_pct_label)
 
-        # ---- 时间信息区域 ----
-        self.time_info_layout = QHBoxLayout()
-        self.time_info_layout.setSpacing(25)
-        self.time_info_layout.setContentsMargins(0, 0, 0, 0)
+        content.addLayout(progress_row)
 
-        # 课程总时长
-        self.total_time_value = self._make_stat_group("课程总时长", "00:00 / 00:00")
-        self.time_info_layout.addLayout(self.total_time_value["layout"])
+        # ---- Row 2-3: 统计网格 (2×2) ----
+        stats_grid = QGridLayout()
+        stats_grid.setContentsMargins(0, 2, 0, 0)
+        stats_grid.setHorizontalSpacing(20)
+        stats_grid.setVerticalSpacing(6)
 
-        # 今日学习
-        self.today_time_value = self._make_stat_group("今日学习", "00:00 / 00:00")
-        self.time_info_layout.addLayout(self.today_time_value["layout"])
+        self.total_time_value = self._make_stat_group("⏱ 课程总时长", "00:00 / 00:00")
+        stats_grid.addLayout(self.total_time_value["layout"], 0, 0)
 
-        # 预计剩余
-        self.remaining_value = self._make_stat_group("预计剩余", "0天")
-        self.time_info_layout.addLayout(self.remaining_value["layout"])
+        self.today_time_value = self._make_stat_group("\U0001F4D6 今日学习", "00:00 / 00:00")
+        stats_grid.addLayout(self.today_time_value["layout"], 0, 1)
 
-        # 学习余额
-        self.balance_value = self._make_stat_group("学习余额", "+00:00")
-        self.time_info_layout.addLayout(self.balance_value["layout"])
+        self.remaining_value = self._make_stat_group("\U0001F4C5 预计剩余", "0天")
+        stats_grid.addLayout(self.remaining_value["layout"], 1, 0)
 
-        self.time_info_layout.addStretch()
-        self.main_layout.addLayout(self.time_info_layout)
+        self.balance_value = self._make_stat_group("⚖ 学习余额", "+00:00")
+        stats_grid.addLayout(self.balance_value["layout"], 1, 1)
+
+        stats_grid.setColumnStretch(0, 1)
+        stats_grid.setColumnStretch(1, 1)
+        content.addLayout(stats_grid)
+
+        self.main_layout.addLayout(content)
 
         # ---- 主题 ----
         theme_service.theme_changed.connect(self._apply_theme)
         self._apply_theme(theme_service.get_theme())
 
-        # ---- 进度动画 ----
-        self.animation_timer = QTimer(self)
-        self.animation_timer.setInterval(20)
-        self.animation_timer.timeout.connect(self._animate_progress)
-        self._target_progress = 0
-        self._current_progress = 0
+    def sizeHint(self):
+        return QSize(360, 200)
 
-    @staticmethod
-    def _make_stat_group(label_text: str, value_text: str) -> dict:
-        """创建统计项布局（标签 + 值）"""
-        layout = QVBoxLayout()
-        layout.setSpacing(4)
-        layout.setContentsMargins(0, 0, 0, 0)
+    # ==================== 自定义属性 ====================
 
-        label = QLabel(label_text)
-        label.setFont(get_font("Regular", 10))
-        label.setObjectName("statLabel")
-        layout.addWidget(label)
+    @Property(float)
+    def hoverProgress(self):
+        return self._hover_progress
 
-        value = QLabel(value_text)
-        value.setFont(get_font("Bold", 13))
-        value.setObjectName("statValue")
-        layout.addWidget(value)
-
-        return {"layout": layout, "label": label, "value": value}
+    @hoverProgress.setter
+    def hoverProgress(self, value):
+        self._hover_progress = value
+        self._apply_hover_state()
 
     # ==================== 数据绑定 ====================
 
     def set_data(self, card_data):
-        """
-        一次性绑定所有展示数据（来自 Controller）。
-
-        Args:
-            card_data: CourseCardData 实例
-        """
         self._course_id = card_data.course_id
         self.course_name_label.setText(card_data.course_name)
         self.name_edit.setText(card_data.course_name)
-
-        # 进度
         self.set_progress(int(card_data.progress_percent))
 
-        # 总时长
         watched_str = self._format_time(int(card_data.watched_sec))
         total_str = self._format_time(int(card_data.total_sec))
         self.total_time_value["value"].setText(f"{watched_str} / {total_str}")
 
-        # 今日学习
         today_str = self._format_time(int(card_data.today_watched_sec))
         plan_str = self._format_time(int(card_data.today_plan_sec))
         self.today_time_value["value"].setText(f"{today_str} / {plan_str}")
 
-        # 预计剩余
         self.remaining_value["value"].setText(f"{card_data.remaining_days}天")
-
-        # 余额
         self.set_balance(card_data.balance_minutes)
-
-    # ---- 保留逐个 setter 以兼容旧代码 ----
 
     def set_course_name(self, name: str):
         self.course_name_label.setText(name)
         self.name_edit.setText(name)
 
     def set_progress(self, progress: int):
-        self._target_progress = max(0, min(100, progress))
-        if not self.animation_timer.isActive():
-            self.animation_timer.start()
+        target = max(0, min(100, progress))
+        self._anim_progress = QPropertyAnimation(self.progress_bar, b"value")
+        self._anim_progress.setDuration(400)
+        self._anim_progress.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim_progress.setStartValue(self.progress_bar.value())
+        self._anim_progress.setEndValue(target)
+        self._anim_progress.valueChanged.connect(
+            lambda v: self.progress_pct_label.setText(f"{int(v)}%")
+        )
+        self._anim_progress.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def set_total_time(self, watched_seconds: float, total_seconds: float):
         watched_str = self._format_time(int(watched_seconds))
@@ -184,47 +191,160 @@ class CourseCard(QWidget):
             self.balance_value["value"].setText(f"+{balance_str}")
         else:
             self.balance_value["value"].setText(f"-{balance_str}")
-
-        # 余额颜色在 _apply_theme 中根据当前主题处理
         self._update_balance_color()
 
-    # ==================== 进度动画 ====================
+    # ==================== 悬停动画 ====================
 
-    def _animate_progress(self):
-        if self._current_progress < self._target_progress:
-            self._current_progress += 1
-            if self._current_progress > self._target_progress:
-                self._current_progress = self._target_progress
-        elif self._current_progress > self._target_progress:
-            self._current_progress -= 1
-            if self._current_progress < self._target_progress:
-                self._current_progress = self._target_progress
-        else:
-            self.animation_timer.stop()
+    def _apply_hover_state(self):
+        """悬停状态 — 三层 accent 驱动的视觉变化，无阴影"""
+        if not self._current_theme:
+            return
+        t = self._hover_progress
+        theme = self._current_theme
+        accent = theme["accent"]
+        is_light = theme["name"] == "light"
 
-        self.progress_bar.setValue(self._current_progress)
-        self.progress_label.setText(f"进度: {self._current_progress}%")
+        # 1. 背景：混入 10% accent 色，形成主题色淡色调
+        mix_ratio = 0.08 if is_light else 0.12
+        tinted_bg = self._interpolate_color(theme["bg_sec"], accent, mix_ratio)
+        bg = self._interpolate_color(theme["bg_sec"], tinted_bg, t)
+
+        # 2. 边框：从默认色过渡到 accent 色
+        border = self._interpolate_color(theme["border"], accent, t)
+
+        # 3. 顶部强调色条：3px → 12px（像"电源条"激活）
+        bar_h = int(3 + t * 9)
+        self.accent_bar.setFixedHeight(bar_h)
+        # 强调色条本身也微微向更亮的 accent 过渡
+        bar_color = self._interpolate_color(accent, self._lighten_color(accent, 0.3), t)
+        self.accent_bar.setStyleSheet(
+            f"background-color: {bar_color}; border: none; border-radius: 0px;"
+        )
+
+        # 4. 百分比标签：从 accent 过渡到更亮的变体
+        pct_color = self._interpolate_color(accent, self._lighten_color(accent, 0.35), t)
+        self.progress_pct_label.setStyleSheet(
+            f"color: {pct_color}; background: transparent; font-weight: bold;"
+        )
+
+        self.setStyleSheet(self._build_card_stylesheet(bg, border, theme))
+
+    @staticmethod
+    def _lighten_color(hex_color: str, factor: float) -> str:
+        """将颜色向白色方向提亮 factor（0~1）"""
+        r, g, b = int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16)
+        r = int(r + (255 - r) * factor)
+        g = int(g + (255 - g) * factor)
+        b = int(b + (255 - b) * factor)
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    def _build_card_stylesheet(self, bg: str, border: str, theme: dict) -> str:
+        return f"""
+            CourseCard {{
+                background-color: {bg};
+                border: 1px solid {border};
+                border-radius: 12px;
+            }}
+        """
+
+    @staticmethod
+    def _interpolate_color(hex_from: str, hex_to: str, t: float) -> str:
+        t = max(0.0, min(1.0, t))
+        r1, g1, b1 = int(hex_from[1:3], 16), int(hex_from[3:5], 16), int(hex_from[5:7], 16)
+        r2, g2, b2 = int(hex_to[1:3], 16), int(hex_to[3:5], 16), int(hex_to[5:7], 16)
+        r = int(r1 + (r2 - r1) * t)
+        g = int(g1 + (g2 - g1) * t)
+        b = int(b1 + (b2 - b1) * t)
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    def enterEvent(self, event):
+        self._anim_hover = QPropertyAnimation(self, b"hoverProgress")
+        self._anim_hover.setDuration(250)
+        self._anim_hover.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim_hover.setStartValue(self._hover_progress)
+        self._anim_hover.setEndValue(1.0)
+        self._anim_hover.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._anim_hover = QPropertyAnimation(self, b"hoverProgress")
+        self._anim_hover.setDuration(300)
+        self._anim_hover.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim_hover.setStartValue(self._hover_progress)
+        self._anim_hover.setEndValue(0.0)
+        self._anim_hover.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+        super().leaveEvent(event)
+
+    # ==================== 交互 ====================
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            child = self.childAt(event.position().toPoint())
+            if child is self.delete_btn:
+                super().mousePressEvent(event)
+                return
+
+            if self._current_theme:
+                theme = self._current_theme
+                self.setStyleSheet(self._build_card_stylesheet(
+                    theme["bg_ter"], theme["accent"], theme
+                ))
+                QTimer.singleShot(100, self._apply_hover_state)
+
+            self.clicked.emit()
+            return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        child = self.childAt(event.position().toPoint())
+        if child is self.delete_btn:
+            super().mouseDoubleClickEvent(event)
+            return
+
+        self.name_stack.setCurrentIndex(1)
+        self.name_edit.setFocus()
+        self.name_edit.selectAll()
+        super().mouseDoubleClickEvent(event)
+
+    def _on_name_edit_finished(self):
+        new_name = self.name_edit.text().strip()
+        self.name_stack.setCurrentIndex(0)
+        if new_name and new_name != self.course_name_label.text():
+            self.course_name_label.setText(new_name)
+            self.name_changed.emit(new_name)
+
+    def _on_delete_clicked(self):
+        self.delete_requested.emit(self._course_id)
 
     # ==================== 主题 ====================
 
     def _apply_theme(self, theme):
         self._current_theme = theme
-        bg_color = theme["bg_sec"]
         text_color = theme["text_main"]
         text_sec = theme["text_sec"]
         border_color = theme["border"]
         accent = theme["accent"]
+        danger = theme["danger"]
+        bg_ter = theme["bg_ter"]
 
-        self.setStyleSheet(f"""
-            CourseCard {{
-                background-color: {bg_color};
-                border: 1px solid {border_color};
-                border-radius: 12px;
-            }}
-        """)
+        # 强调色条（重置为默认高度 3px）
+        self.accent_bar.setFixedHeight(3)
+        self.accent_bar.setStyleSheet(
+            f"background-color: {accent}; border: none; border-radius: 0px;"
+        )
 
-        self.course_name_label.setStyleSheet(f"color: {text_color}; font-weight: bold; background: transparent;")
-        self.progress_label.setStyleSheet(f"color: {text_sec}; background: transparent;")
+        # 卡片背景/边框
+        self.setStyleSheet(self._build_card_stylesheet(theme["bg_sec"], border_color, theme))
+
+        # 课程名称
+        self.course_name_label.setStyleSheet(
+            f"color: {text_color}; font-weight: bold; background: transparent;"
+        )
+
+        # 百分比标签（accent 色，hover 时会动态提亮）
+        self.progress_pct_label.setStyleSheet(
+            f"color: {accent}; background: transparent; font-weight: bold;"
+        )
 
         # 进度条
         self.progress_bar.setStyleSheet(f"""
@@ -239,6 +359,21 @@ class CourseCard(QWidget):
             }}
         """)
 
+        # 垃圾桶按钮
+        self.delete_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: none;
+                border-radius: 13px;
+                color: {text_sec};
+                font-size: 14px;
+            }}
+            QPushButton:hover {{
+                color: {danger};
+                background: {bg_ter};
+            }}
+        """)
+
         # 统计标签
         for group in [self.total_time_value, self.today_time_value,
                        self.remaining_value, self.balance_value]:
@@ -248,67 +383,40 @@ class CourseCard(QWidget):
         self._update_balance_color()
 
     def _update_balance_color(self):
-        """根据余额正负设置颜色"""
         if not self._current_theme:
             return
         text = self.balance_value["value"].text()
         if text.startswith("+"):
             self.balance_value["value"].setStyleSheet(
-                f"color: #4CAF50; font-weight: bold; background: transparent;"
+                "color: #4CAF50; font-weight: bold; background: transparent;"
             )
         elif text.startswith("-"):
             self.balance_value["value"].setStyleSheet(
-                f"color: #F44336; font-weight: bold; background: transparent;"
+                "color: #F44336; font-weight: bold; background: transparent;"
             )
-
-    # ==================== 交互 ====================
-
-    def mouseDoubleClickEvent(self, event):
-        """双击进入名称编辑模式"""
-        self.course_name_label.setVisible(False)
-        self.name_edit.setVisible(True)
-        self.name_edit.setFocus()
-        self.name_edit.selectAll()
-        super().mouseDoubleClickEvent(event)
-
-    def _on_name_edit_finished(self):
-        """名称编辑完成"""
-        new_name = self.name_edit.text().strip()
-        self.course_name_label.setVisible(True)
-        self.name_edit.setVisible(False)
-        if new_name and new_name != self.course_name_label.text():
-            self.course_name_label.setText(new_name)
-            self.name_changed.emit(new_name)
-
-    def enterEvent(self, event):
-        if self._current_theme:
-            is_light = self._current_theme["name"] == "light"
-            accent = self._current_theme["accent"]
-            hover_bg = "#F0F7FF" if is_light else "#1E3A5F"
-            self.setStyleSheet(f"""
-                CourseCard {{
-                    background-color: {hover_bg};
-                    border: 1px solid {accent};
-                    border-radius: 12px;
-                }}
-            """)
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        if self._current_theme:
-            self._apply_theme(self._current_theme)
-        super().leaveEvent(event)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
-        super().mousePressEvent(event)
 
     # ==================== 工具方法 ====================
 
     @staticmethod
+    def _make_stat_group(label_text: str, value_text: str) -> dict:
+        layout = QVBoxLayout()
+        layout.setSpacing(1)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        label = QLabel(label_text)
+        label.setFont(get_font("Regular", 9))
+        label.setObjectName("statLabel")
+        layout.addWidget(label)
+
+        value = QLabel(value_text)
+        value.setFont(get_font("Bold", 12))
+        value.setObjectName("statValue")
+        layout.addWidget(value)
+
+        return {"layout": layout, "label": label, "value": value}
+
+    @staticmethod
     def _format_time(seconds: int) -> str:
-        """格式化秒数为 HH:MM"""
         hours = seconds // 3600
         minutes = (seconds % 3600) // 60
         return f"{hours:02d}:{minutes:02d}"

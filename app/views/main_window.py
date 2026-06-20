@@ -5,8 +5,8 @@ import math
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QStackedWidget, QGraphicsDropShadowEffect,
 )
-from PySide6.QtCore import Qt, QPoint, QSize
-from PySide6.QtGui import QPainterPath, QRegion, QColor, QCursor
+from PySide6.QtCore import Qt, QPoint
+from PySide6.QtGui import QPainter, QPainterPath, QRegion, QColor, QCursor
 
 from views.title_bar import TitleBar
 from views.home_view import HomeView
@@ -35,6 +35,12 @@ class MainWindow(QWidget):
         self._border_width = 8
         self.setMouseTracking(True)  # 鼠标悬停时追踪，用于边缘光标切换
 
+        # 边缘拖拽缩放状态
+        self._is_resizing = False
+        self._resize_direction = None
+        self._drag_start_pos = None
+        self._window_start_geometry = None
+
         # ---- 布局 ----
         main_layout = QVBoxLayout(self)
         shadow_margin = 10
@@ -44,6 +50,8 @@ class MainWindow(QWidget):
         # 内容容器
         self.content_widget = QWidget()
         self.content_widget.setObjectName("contentWidget")
+        self.content_widget.setMouseTracking(True)
+        self.content_widget.installEventFilter(self)
         main_layout.addWidget(self.content_widget)
 
         content_layout = QVBoxLayout(self.content_widget)
@@ -72,6 +80,12 @@ class MainWindow(QWidget):
         # ---- 初始状态 ----
         self.move_to_center()
         self.theme_animation_widget = None
+
+        # print(f"[Resize] INIT: _border_width={self._border_width} shadow_margin={shadow_margin}")
+        # print(f"[Resize] INIT: _RESIZE_CURSORS={self._RESIZE_CURSORS}")
+        # print(f"[Resize] INIT: MainWindow.setMouseTracking={self.hasMouseTracking()}")
+        # print(f"[Resize] INIT: content_widget.setMouseTracking={self.content_widget.hasMouseTracking()}")
+        # print(f"[Resize] INIT: eventFilter installed on content_widget")
 
     # ==================== 主题 ====================
 
@@ -142,6 +156,18 @@ class MainWindow(QWidget):
 
     # ==================== 窗口行为 ====================
 
+    def paintEvent(self, event):
+        """用 alpha=1 填充主窗口，确保透明边距区能接收鼠标事件。
+
+        不加这段，WA_TranslucentBackground + 透明 shadow_margin 会导致
+        边缘区域的鼠标事件穿透到下层窗口，边缘拖拽缩放完全失效。
+        alpha=1 在视觉上完全不可见。
+        """
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 1))
+        painter.end()
+        event.accept()
+
     def move_to_center(self):
         """将窗口移动到屏幕中央"""
         screen = self.screen()
@@ -174,111 +200,173 @@ class MainWindow(QWidget):
 
     # ==================== 边缘拖拽缩放 ====================
 
-    _CURSOR_MAP = {
-        (True, False, False, False): Qt.CursorShape.SizeHorCursor,        # left
-        (False, True, False, False): Qt.CursorShape.SizeHorCursor,        # right
-        (False, False, True, False): Qt.CursorShape.SizeVerCursor,        # top
-        (False, False, False, True): Qt.CursorShape.SizeVerCursor,        # bottom
-        (True, False, True, False): Qt.CursorShape.SizeFDiagCursor,       # top-left
-        (False, True, True, False): Qt.CursorShape.SizeBDiagCursor,       # top-right
-        (True, False, False, True): Qt.CursorShape.SizeBDiagCursor,       # bottom-left
-        (False, True, False, True): Qt.CursorShape.SizeFDiagCursor,       # bottom-right
+    _last_logged_direction = None  # 避免鼠标移动日志刷屏
+
+    def eventFilter(self, watched, event):
+        """将 content_widget 的鼠标事件映射到 MainWindow 坐标系后统一处理。"""
+        if watched is self.content_widget:
+            etype = event.type()
+            if etype == event.Type.MouseMove:
+                mapped_pos = event.position().toPoint() + self.content_widget.pos()
+                if self._is_resizing:
+                    self._perform_resize(event.globalPosition().toPoint())
+                    return True
+                else:
+                    direction = self._get_resize_direction(mapped_pos)
+                    if direction != self._last_logged_direction:
+                        self._last_logged_direction = direction
+                        #print(f"[Resize] eventFilter Move: local=({event.position().toPoint().x()},{event.position().toPoint().y()}) mapped=({mapped_pos.x()},{mapped_pos.y()}) win=({self.rect().width()}x{self.rect().height()}) direction={direction}")
+                    self._update_resize_cursor(direction)
+            elif etype == event.Type.MouseButtonPress:
+                if event.button() == Qt.MouseButton.LeftButton:
+                    mapped_pos = event.position().toPoint() + self.content_widget.pos()
+                    direction = self._get_resize_direction(mapped_pos)
+                    #print(f"[Resize] eventFilter Press: mapped=({mapped_pos.x()},{mapped_pos.y()}) win=({self.rect().width()}x{self.rect().height()}) direction={direction}")
+                    if direction:
+                        #print(f"[Resize] >>> START RESIZE (from eventFilter): {direction} <<<")
+                        self._is_resizing = True
+                        self._resize_direction = direction
+                        self._drag_start_pos = event.globalPosition().toPoint()
+                        self._window_start_geometry = self.geometry()
+                        return True
+            elif etype == event.Type.MouseButtonRelease:
+                if event.button() == Qt.MouseButton.LeftButton and self._is_resizing:
+                    #print(f"[Resize] <<< END RESIZE (from eventFilter) <<<")
+                    self._is_resizing = False
+                    self._resize_direction = None
+                    return True
+        return super().eventFilter(watched, event)
+
+    _RESIZE_CURSORS = {
+        "top-left":     Qt.CursorShape.SizeFDiagCursor,
+        "bottom-right": Qt.CursorShape.SizeFDiagCursor,
+        "top-right":    Qt.CursorShape.SizeBDiagCursor,
+        "bottom-left":  Qt.CursorShape.SizeBDiagCursor,
+        "left":         Qt.CursorShape.SizeHorCursor,
+        "right":        Qt.CursorShape.SizeHorCursor,
+        "top":          Qt.CursorShape.SizeVerCursor,
+        "bottom":       Qt.CursorShape.SizeVerCursor,
     }
 
-    def _hit_test_edges(self, pos: QPoint):
-        """检测鼠标位置靠近哪些边缘。
+    def _get_resize_direction(self, pos: QPoint):
+        """判断鼠标位置对应的调整方向。
 
         Returns:
-            (on_left, on_right, on_top, on_bottom) 或 None（不在边缘区域）
+            方向字符串 ("top-left", "right", ...) 或 None
         """
         if self.isMaximized():
             return None
         rect = self.rect()
+        x, y = pos.x(), pos.y()
         b = self._border_width
-        on_left = pos.x() <= b
-        on_right = pos.x() >= rect.width() - b
-        on_top = pos.y() <= b
-        on_bottom = pos.y() >= rect.height() - b
-        if on_left or on_right or on_top or on_bottom:
-            return (on_left, on_right, on_top, on_bottom)
+
+        on_left = x <= b
+        on_right = x >= rect.width() - b
+        on_top = y <= b
+        on_bottom = y >= rect.height() - b
+
+        if on_top and on_left:
+            return "top-left"
+        elif on_top and on_right:
+            return "top-right"
+        elif on_bottom and on_left:
+            return "bottom-left"
+        elif on_bottom and on_right:
+            return "bottom-right"
+        elif on_left:
+            return "left"
+        elif on_right:
+            return "right"
+        elif on_top:
+            return "top"
+        elif on_bottom:
+            return "bottom"
         return None
 
-    def _get_resize_edge(self, pos: QPoint):
-        """获取 Qt.Edge 用于 startSystemResize"""
-        edges = self._hit_test_edges(pos)
-        if edges is None:
-            return None
-        on_left, on_right, on_top, on_bottom = edges
-        edge = Qt.Edge(0)
-        if on_left:
-            edge |= Qt.Edge.LeftEdge
-        if on_right:
-            edge |= Qt.Edge.RightEdge
-        if on_top:
-            edge |= Qt.Edge.TopEdge
-        if on_bottom:
-            edge |= Qt.Edge.BottomEdge
-        return edge
+    _last_cursor_direction = None
 
-    def mouseMoveEvent(self, event):
-        """在边缘附近时更新鼠标光标"""
-        edges = self._hit_test_edges(event.position().toPoint())
-        if edges is not None:
-            self.setCursor(QCursor(self._CURSOR_MAP.get(edges, Qt.CursorShape.ArrowCursor)))
+    def _update_resize_cursor(self, direction):
+        """根据方向更新鼠标光标"""
+        if direction != self._last_cursor_direction:
+            self._last_cursor_direction = direction
+            cursor_name = self._RESIZE_CURSORS.get(direction, "ArrowCursor") if direction else "ArrowCursor"
+            #print(f"[Resize] Cursor -> {cursor_name} (direction={direction}, in map={direction in self._RESIZE_CURSORS if direction else 'N/A'})")
+        if direction and direction in self._RESIZE_CURSORS:
+            self.setCursor(QCursor(self._RESIZE_CURSORS[direction]))
         else:
             self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
-        super().mouseMoveEvent(event)
 
     def mousePressEvent(self, event):
-        """边缘拖拽 → 启动系统级窗口缩放"""
+        """边缘拖拽 → 手动调整窗口大小"""
         if event.button() == Qt.MouseButton.LeftButton:
-            edge = self._get_resize_edge(event.position().toPoint())
-            if edge is not None and edge != Qt.Edge(0) and self.windowHandle():
-                self.windowHandle().startSystemResize(edge)
+            pos = event.position().toPoint()
+            direction = self._get_resize_direction(pos)
+            #print(f"[Resize] MainWindow Press: pos=({pos.x()},{pos.y()}) win=({self.rect().width()}x{self.rect().height()}) direction={direction}")
+            if direction:
+                #print(f"[Resize] >>> START RESIZE (from MainWindow): {direction} <<<")
+                self._is_resizing = True
+                self._resize_direction = direction
+                self._drag_start_pos = event.globalPosition().toPoint()
+                self._window_start_geometry = self.geometry()
+                event.accept()
                 return
         super().mousePressEvent(event)
 
-    # ==================== Windows 原生化 ====================
+    def mouseMoveEvent(self, event):
+        """边缘缩放（进行中）或光标更新"""
+        if self._is_resizing:
+            self._perform_resize(event.globalPosition().toPoint())
+            event.accept()
+        else:
+            pos = event.position().toPoint()
+            direction = self._get_resize_direction(pos)
+            if direction != self._last_logged_direction:
+                self._last_logged_direction = direction
+                #print(f"[Resize] MainWindow Move: pos=({pos.x()},{pos.y()}) win=({self.rect().width()}x{self.rect().height()}) direction={direction}")
+            self._update_resize_cursor(direction)
+            super().mouseMoveEvent(event)
 
-    def nativeEvent(self, eventType, message):
-        """处理 Windows 原生化消息（边框拖拽缩放）"""
-        if eventType in ("windows_generic_MSG", b"windows_generic_MSG"):
-            try:
-                import ctypes
-                from ctypes.wintypes import MSG
-                msg = MSG.from_address(int(message))
-                if msg.message == 0x0084:  # WM_NCHITTEST
-                    if self.isMaximized():
-                        return super().nativeEvent(eventType, message)
+    def mouseReleaseEvent(self, event):
+        """结束边缘缩放"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            #if self._is_resizing:
+                #print(f"[Resize] <<< END RESIZE (from MainWindow) <<<")
+            self._is_resizing = False
+            self._resize_direction = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
-                    x = ctypes.c_short(msg.lParam & 0xFFFF).value
-                    y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
-                    rect = self.frameGeometry()
-                    border = self._border_width
+    def _perform_resize(self, global_pos: QPoint):
+        """执行窗口大小调整，确保不小于最小尺寸"""
+        if not self._is_resizing or not self._resize_direction:
+            return
 
-                    on_left = rect.left() <= x < rect.left() + border
-                    on_right = rect.right() - border < x <= rect.right()
-                    on_top = rect.top() <= y < rect.top() + border
-                    on_bottom = rect.bottom() - border < y <= rect.bottom()
+        delta = global_pos - self._drag_start_pos
+        new_geo = self._window_start_geometry
+        x, y, w, h = new_geo.x(), new_geo.y(), new_geo.width(), new_geo.height()
 
-                    # 标题栏内部区域 — 排除所有边缘（允许窗口拖拽）
-                    title_bottom = rect.top() + self.title_bar.height()
-                    in_title_inner = (
-                        rect.top() + border <= y < title_bottom
-                        and not on_left and not on_right and not on_top
-                    )
-                    if in_title_inner:
-                        return super().nativeEvent(eventType, message)
+        if "left" in self._resize_direction:
+            x = new_geo.x() + delta.x()
+            w = new_geo.width() - delta.x()
+        if "right" in self._resize_direction:
+            w = new_geo.width() + delta.x()
+        if "top" in self._resize_direction:
+            y = new_geo.y() + delta.y()
+            h = new_geo.height() - delta.y()
+        if "bottom" in self._resize_direction:
+            h = new_geo.height() + delta.y()
 
-                    # 边框区域 → 返回对应的 HT 值
-                    if on_top and on_left: return True, 13      # HTTOPLEFT
-                    elif on_top and on_right: return True, 14    # HTTOPRIGHT
-                    elif on_bottom and on_left: return True, 16  # HTBOTTOMLEFT
-                    elif on_bottom and on_right: return True, 17 # HTBOTTOMRIGHT
-                    elif on_left: return True, 10                # HTLEFT
-                    elif on_right: return True, 11               # HTRIGHT
-                    elif on_top: return True, 12                 # HTTOP
-                    elif on_bottom: return True, 15              # HTBOTTOM
-            except Exception:
-                pass
-        return super().nativeEvent(eventType, message)
+        # 确保不小于最小尺寸
+        min_w = self.minimumWidth()
+        min_h = self.minimumHeight()
+        if w < min_w:
+            if "left" in self._resize_direction:
+                x = new_geo.x() + new_geo.width() - min_w
+            w = min_w
+        if h < min_h:
+            if "top" in self._resize_direction:
+                y = new_geo.y() + new_geo.height() - min_h
+            h = min_h
+
+        self.setGeometry(x, y, w, h)

@@ -15,3 +15,6 @@ debug/verify_app_bar.py
 debug/
 data/
 sdk/
+tools/download_fonts.py
+.vscode/settings.json
+.log

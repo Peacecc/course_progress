@@ -4,18 +4,18 @@
 参考文档: doc/Version_Define.md
 """
 
-__version__ = "0.1.0-alpha"
+__version__ = "0.1.1-alpha"
 __author__ = "CourseFlow Team"
 __app_name__ = "CourseFlow"
 
 # 版本详情
 VERSION_MAJOR = 0
 VERSION_MINOR = 1
-VERSION_PATCH = 0
+VERSION_PATCH = 1
 VERSION_PRERELEASE = "alpha"  # 开发阶段: alpha → beta → rc → (正式版省略)
 
 # 版本描述
-VERSION_DESCRIPTION = "初始开发版本 — 核心功能：课程库管理、学习计划、视频播放、进度追踪"
+VERSION_DESCRIPTION = "课程卡片重构 — 多列网格布局、accent 主题色悬停高亮、垃圾桶删除、窗口四边四角缩放"
 
 
 def get_version_string() -> str:

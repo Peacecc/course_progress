@@ -13,23 +13,9 @@ from version import get_version_string, get_version_info
 class TitleBar(QWidget):
     """自定义标题栏 — 窗口拖拽、菜单、主题切换、窗口控制"""
 
-    # 边缘检测宽度（与 MainWindow._border_width 保持一致）
-    _EDGE_WIDTH = 8
-
-    # 边缘 → 光标映射
-    _CURSOR_MAP = {
-        (True, False, False, False): Qt.CursorShape.SizeHorCursor,
-        (False, True, False, False): Qt.CursorShape.SizeHorCursor,
-        (False, False, True, False): Qt.CursorShape.SizeVerCursor,
-        (False, False, False, True): Qt.CursorShape.SizeVerCursor,
-        (True, False, True, False): Qt.CursorShape.SizeFDiagCursor,
-        (False, True, True, False): Qt.CursorShape.SizeBDiagCursor,
-    }
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedHeight(45)
-        self.setMouseTracking(True)  # 追踪鼠标悬停，用于边缘光标切换
         self.layout = QHBoxLayout(self)
         self.layout.setContentsMargins(15, 0, 10, 0)
         self.layout.setSpacing(8)
@@ -75,8 +61,8 @@ class TitleBar(QWidget):
             self.controls_layout.addWidget(btn)
         self.layout.addLayout(self.controls_layout)
 
-        self.start_pos = None
         self.normal_geometry = None
+        self._drag_pos = None
 
         # ---- 菜单 ----
         self._menu = None
@@ -224,69 +210,31 @@ class TitleBar(QWidget):
         else:
             theme_service.toggle_theme()
 
-    # ==================== 窗口拖拽（边缘感知） ====================
-
-    def _hit_edges(self, pos: QPoint):
-        """检测鼠标位置是否在窗口边缘区域。
-
-        仅在标题栏上下文中检查左、右、上边缘（标题栏位于窗口顶部）。
-
-        Returns:
-            (on_left, on_right, on_top) 元组，或 None
-        """
-        if self.window().isMaximized():
-            return None
-        w = self.width()
-        b = self._EDGE_WIDTH
-        on_left = pos.x() <= b
-        on_right = pos.x() >= w - b
-        on_top = pos.y() <= b
-        if on_left or on_right or on_top:
-            return (on_left, on_right, on_top)
-        return None
-
-    def _on_resize_edge(self, pos: QPoint) -> bool:
-        """判断是否处于边缘缩放区域，若是则更新光标并返回 True"""
-        edges = self._hit_edges(pos)
-        if edges is None:
-            self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
-            return False
-        on_left, on_right, on_top = edges
-        cursor = self._CURSOR_MAP.get(
-            (on_left, on_right, on_top, False),  # bottom 始终 False（标题栏在顶部）
-            Qt.CursorShape.ArrowCursor,
-        )
-        self.setCursor(QCursor(cursor))
-        return True
+    # ==================== 窗口拖拽 ====================
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            # 如果鼠标在缩放边缘区域，不启动拖拽（交由 nativeEvent / MainWindow 处理）
-            if self._on_resize_edge(event.position().toPoint()):
-                return
-            self.start_pos = event.globalPosition().toPoint()
+            self._drag_pos = event.globalPosition().toPoint()
 
     def mouseMoveEvent(self, event):
-        if self.start_pos:
-            # 正在拖拽窗口
-            if self.window().isMaximized():
-                ratio = event.position().x() / self.width()
-                self.maximize_window(restore_pos=False)
-                new_width = self.window().width()
-                new_x = event.globalPosition().toPoint().x() - int(new_width * ratio)
-                new_y = event.globalPosition().toPoint().y() - event.position().toPoint().y()
-                self.window().move(new_x, new_y)
-                self.start_pos = event.globalPosition().toPoint()
-            else:
-                delta = event.globalPosition().toPoint() - self.start_pos
-                self.window().move(self.window().pos() + delta)
-                self.start_pos = event.globalPosition().toPoint()
+        if self._drag_pos is None:
+            return
+        if self.window().isMaximized():
+            # 从最大化状态拖拽 → 先还原再定位
+            ratio = event.position().x() / self.width()
+            self.maximize_window(restore_pos=False)
+            new_x = event.globalPosition().toPoint().x() - int(self.window().width() * ratio)
+            new_y = event.globalPosition().toPoint().y() - event.position().toPoint().y()
+            self.window().move(new_x, new_y)
+            self._drag_pos = event.globalPosition().toPoint()
         else:
-            # 更新边缘光标
-            self._on_resize_edge(event.position().toPoint())
+            delta = event.globalPosition().toPoint() - self._drag_pos
+            self.window().move(self.window().pos() + delta)
+            self._drag_pos = event.globalPosition().toPoint()
 
     def mouseReleaseEvent(self, event):
-        self.start_pos = None
+        self._drag_pos = None
+        event.accept()
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
