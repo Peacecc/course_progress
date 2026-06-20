@@ -1,3 +1,5 @@
+"""ThemeAnimationWidget — 主题切换动画组件，圆形扩散过渡效果"""
+
 from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, Property, QPoint, Signal, QPointF
 from PySide6.QtGui import QPainter, QPainterPath, QImage

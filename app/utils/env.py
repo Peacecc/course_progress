@@ -1,3 +1,5 @@
+"""环境配置工具 — 设置 Qt 平台插件路径和环境变量"""
+
 import os
 import sys
 import importlib.util

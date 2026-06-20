@@ -1,3 +1,5 @@
+"""ElaDatePicker — 自定义日期选择器组件，点击展开日历面板选择日期"""
+
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QMenu, QWidgetAction, QPushButton, QVBoxLayout
 from PySide6.QtCore import Qt, Signal, QDate, QSize
 from PySide6.QtGui import QCursor, QAction
@@ -45,7 +47,6 @@ class ElaDatePicker(QWidget):
                 border-radius: 6px;
                 padding: 5px 12px;
                 text-align: left;
-                font-family: 'Segoe UI', 'Microsoft YaHei';
                 font-size: 13px;
             }}
             QPushButton:hover {{

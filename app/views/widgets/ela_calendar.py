@@ -1,3 +1,5 @@
+"""ElaCalendar — 自定义日历面板组件，供 ElaDatePicker 内部使用，支持年份/月份快速切换"""
+
 from PySide6.QtWidgets import QCalendarWidget, QWidget, QVBoxLayout, QToolButton, QTableView, QSpinBox
 from PySide6.QtCore import Qt, QDate, Property, QSize
 from PySide6.QtGui import QColor, QFont, QPainter, QBrush, QTextCharFormat

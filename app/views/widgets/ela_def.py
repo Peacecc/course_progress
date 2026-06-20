@@ -1,3 +1,5 @@
+"""ElaDef — Ela 组件库的基础定义，包含主题类型、图标枚举等常量"""
+
 from enum import Enum, auto
 
 class ElaThemeType:

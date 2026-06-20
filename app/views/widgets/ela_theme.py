@@ -1,3 +1,5 @@
+"""ElaTheme — Ela 组件库主题单例，管理 Ela 系列组件的配色方案"""
+
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QColor, QFontDatabase
 import os
@@ -76,9 +78,9 @@ class ElaTheme(QObject):
         # Copied from ElaThemePrivate.cpp (Manual Port)
         L[ThemeColor.ScrollBarHandle] = QColor(0xA0, 0xA0, 0xA0)
         L[ThemeColor.ToggleSwitchNoToggledCenter] = QColor(0x5A, 0x5A, 0x5A)
-        L[ThemeColor.PrimaryNormal] = QColor(0x00, 0x67, 0xC0)
-        L[ThemeColor.PrimaryHover] = QColor(0x19, 0x75, 0xC5)
-        L[ThemeColor.PrimaryPress] = QColor(0x31, 0x83, 0xCA)
+        L[ThemeColor.PrimaryNormal] = QColor(0x00, 0x78, 0xD4)
+        L[ThemeColor.PrimaryHover] = QColor(0x19, 0x88, 0xE3)
+        L[ThemeColor.PrimaryPress] = QColor(0x00, 0x62, 0xB0)
         
         L[ThemeColor.WindowBase] = QColor(0xF3, 0xF3, 0xF3)
         L[ThemeColor.WindowCentralStackBase] = QColor(255, 255, 255, 80)
@@ -130,9 +132,9 @@ class ElaTheme(QObject):
         
         D[ThemeColor.ScrollBarHandle] = QColor(0x9F, 0x9F, 0x9F)
         D[ThemeColor.ToggleSwitchNoToggledCenter] = QColor(0xD0, 0xD0, 0xD0)
-        D[ThemeColor.PrimaryNormal] = QColor(0x4C, 0xC2, 0xFF)
-        D[ThemeColor.PrimaryHover] = QColor(0x47, 0xB1, 0xE8)
-        D[ThemeColor.PrimaryPress] = QColor(0x42, 0xA1, 0xD2)
+        D[ThemeColor.PrimaryNormal] = QColor(0x00, 0x78, 0xD4)
+        D[ThemeColor.PrimaryHover] = QColor(0x19, 0x88, 0xE3)
+        D[ThemeColor.PrimaryPress] = QColor(0x00, 0x62, 0xB0)
         
         D[ThemeColor.WindowBase] = QColor(0x20, 0x20, 0x20)
         D[ThemeColor.WindowCentralStackBase] = QColor(0x3E, 0x3E, 0x3E, 60)

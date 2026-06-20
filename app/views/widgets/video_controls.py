@@ -1,4 +1,6 @@
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
+"""VideoControls — 视频播放控制条组件，包含播放/暂停、进度条、音量、速度调节"""
+
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                              QLabel, QSlider, QFrame, QStyle, QStyleOptionSlider)
 from PySide6.QtCore import Qt, Signal, QTimer, QRect, QPoint, QSize
 from PySide6.QtGui import QColor, QPainter, QLinearGradient, QMouseEvent, QPainterPath

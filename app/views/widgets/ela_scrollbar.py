@@ -1,4 +1,6 @@
-from PySide6.QtCore import (Qt, QPropertyAnimation, QEasingCurve, QRect, QRectF, Signal, 
+"""ElaScrollbar — 自定义滚动条组件，提供现代化风格的垂直/水平滚动条"""
+
+from PySide6.QtCore import (Qt, QPropertyAnimation, QEasingCurve, QRect, QRectF, Signal,
                             QTimer, QEvent, QPoint, QObject, Property)
 from PySide6.QtGui import QPainter, QPainterPath, QColor, QMouseEvent
 from PySide6.QtWidgets import QScrollBar, QProxyStyle, QStyle, QStyleOptionSlider, QApplication, QWidget
@@ -72,7 +74,22 @@ class ElaScrollBarStyle(QProxyStyle):
                 
                 # Draw Slider Handle
                 slider_rect = self.subControlRect(control, option, QStyle.SC_ScrollBarSlider, widget)
+                
+                # Dynamic Handle Color Logic: Use Primary color on Hover/Press
                 handle_color = ela_theme.get_theme_color(ElaThemeType.ThemeColor.ScrollBarHandle)
+                current_state = option.state
+                is_mouse_over = (current_state & QStyle.State_MouseOver)
+                is_sunken = (current_state & QStyle.State_Sunken)
+                
+                # Check if mouse is strictly over the slider handle part (not just scrollbar track)
+                # QStyleOptionSlider doesn't always set MouseOver specifically for the handle subcontrol in global state.
+                # However, for QScrollBar, the `activeSubControls` matching `SC_ScrollBarSlider` is cleaner check if available.
+                # Simplified check: if ScrollBar is MouseOver, we highlight handle? Or check `activeSubControls`.
+                
+                if (option.activeSubControls & QStyle.SC_ScrollBarSlider):
+                     if is_sunken or is_mouse_over:
+                         handle_color = ela_theme.get_theme_color(ElaThemeType.ThemeColor.PrimaryNormal)
+                
                 painter.setBrush(handle_color)
                 
                 slider_rect_f = QRectF(slider_rect)

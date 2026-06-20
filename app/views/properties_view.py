@@ -1,703 +1,1346 @@
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QGridLayout, QFrame, QDoubleSpinBox, QPushButton, QDateEdit, 
-                             QSlider, QCheckBox, QSizePolicy, QStyleOptionSlider, QStyle, QScrollArea)
+"""课程看板视图 — 进度总览 + 学习时间线 + 周计划"""
+
+from datetime import date, datetime
+
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QFrame, QPushButton, QSlider, QSizePolicy, QStyleOptionSlider,
+    QStyle, QScrollArea, QProgressBar, QStackedWidget, QDialog,
+)
 from PySide6.QtCore import Qt, QDate, Signal, QPoint
-from PySide6.QtGui import QPainter, QBrush, QColor
+from PySide6.QtGui import QFont
+
 from services.theme_service import theme_service as theme_manager
-from models.data_manager import DataManager
-from datetime import datetime, timedelta, date
+from utils.fonts import get_font
+from views.widgets.ela_date_picker import ElaDatePicker
+from views.widgets.course_timeline import CourseTimeline
+
+
+# ==================== 可点击滑块 ====================
 
 class ClickableSlider(QSlider):
+    """支持点击跳转的滑块"""
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            val = self.pixelPosToRangeValue(event.position().toPoint())
-            self.setValue(val)
+            self.setValue(self._pixel_pos_to_value(event.position().toPoint()))
             event.accept()
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         if event.buttons() & Qt.MouseButton.LeftButton:
-            val = self.pixelPosToRangeValue(event.position().toPoint())
-            self.setValue(val)
+            self.setValue(self._pixel_pos_to_value(event.position().toPoint()))
             event.accept()
         else:
             super().mouseMoveEvent(event)
 
-    def pixelPosToRangeValue(self, pos):
+    def _pixel_pos_to_value(self, pos: QPoint) -> int:
         opt = QStyleOptionSlider()
         self.initStyleOption(opt)
-        gr = self.style().subControlRect(QStyle.ComplexControl.CC_Slider, opt, QStyle.SubControl.SC_SliderGroove, self)
-        sr = self.style().subControlRect(QStyle.ComplexControl.CC_Slider, opt, QStyle.SubControl.SC_SliderHandle, self)
-
+        gr = self.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider, opt, QStyle.SubControl.SC_SliderGroove, self)
+        sr = self.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider, opt, QStyle.SubControl.SC_SliderHandle, self)
         if self.orientation() == Qt.Orientation.Vertical:
-            sliderLength = sr.height()
-            sliderMin = gr.y()
-            sliderMax = gr.y() + gr.height() - sliderLength + 1
-            prop = 1.0 - (pos.y() - sliderMin) / (sliderMax - sliderMin)
+            slider_len = sr.height()
+            slider_min = gr.y()
+            slider_max = gr.y() + gr.height() - slider_len + 1
+            prop = 1.0 - (pos.y() - slider_min) / (slider_max - slider_min)
         else:
-            sliderLength = sr.width()
-            sliderMin = gr.x()
-            sliderMax = gr.x() + gr.width() - sliderLength + 1
-            prop = (pos.x() - sliderMin) / (sliderMax - sliderMin)
-
+            slider_len = sr.width()
+            slider_min = gr.x()
+            slider_max = gr.x() + gr.width() - slider_len + 1
+            prop = (pos.x() - slider_min) / (slider_max - slider_min)
         return int(self.minimum() + prop * (self.maximum() - self.minimum()))
 
+
+# ==================== 每日滑块（纵向旧版，保留兼容） ====================
+
 class DailySlider(QWidget):
+    """单日学习时长滑块（垂直）"""
     value_changed = Signal(float)
 
-    def __init__(self, day_name, parent=None):
+    def __init__(self, day_name: str, parent=None):
         super().__init__(parent)
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(0, 0, 0, 0)
-        self.layout.setSpacing(8)
-        self.layout.setAlignment(Qt.AlignmentFlag.AlignHCenter) 
-        
-        # Top Label (Value)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
         self.val_label = QLabel("0h")
         self.val_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.layout.addWidget(self.val_label, 0, Qt.AlignmentFlag.AlignHCenter)
-        
-        # Slider
+        layout.addWidget(self.val_label, 0, Qt.AlignmentFlag.AlignHCenter)
+
         self.slider = ClickableSlider(Qt.Orientation.Vertical)
-        self.slider.setRange(0, 72) # 0 to 12h
+        self.slider.setRange(0, 72)
         self.slider.setSingleStep(1)
         self.slider.setPageStep(6)
         self.slider.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.slider.setInvertedAppearance(False) # Ensure Bottom is 0, Top is Max
-        self.slider.valueChanged.connect(self.on_slider_change)
-        
-        # Important: Fixed height for sliders to look uniform
-        self.slider.setFixedHeight(120)
-        self.layout.addWidget(self.slider, 0, Qt.AlignmentFlag.AlignHCenter)
-        
-        # Day Name
+        self.slider.setFixedHeight(110)
+        self.slider.valueChanged.connect(self._on_slider_change)
+        layout.addWidget(self.slider, 0, Qt.AlignmentFlag.AlignHCenter)
+
         self.day_label = QLabel(day_name)
         self.day_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.layout.addWidget(self.day_label, 0, Qt.AlignmentFlag.AlignHCenter)
-        
-        theme_manager.theme_changed.connect(self.apply_theme)
-        self.apply_theme(theme_manager.get_theme())
+        layout.addWidget(self.day_label, 0, Qt.AlignmentFlag.AlignHCenter)
 
-    def on_slider_change(self, val):
+        theme_manager.theme_changed.connect(self._apply_theme)
+        self._apply_theme(theme_manager.get_theme())
+
+    def _on_slider_change(self, val: int):
         minutes = val * 10
-        hours_val = minutes / 60
-            
-        h = int(hours_val)
-        m = int(minutes % 60)
-        
-        if m == 0:
-            self.val_label.setText(f"{h}h")
-        else:
-            self.val_label.setText(f"{h}h{m}")
-            
-        self.value_changed.emit(hours_val)
+        h = minutes // 60
+        m = minutes % 60
+        self.val_label.setText(f"{h}h" if m == 0 else f"{h}h{m}")
+        self.value_changed.emit(minutes / 60.0)
 
-    def set_value(self, hours):
-        val = int(hours * 6)
-        if val > 72: val = 72
-        self.slider.setValue(val)
+    def set_value(self, hours: float):
+        self.slider.blockSignals(True)
+        self.slider.setValue(min(int(hours * 6), 72))
+        self.slider.blockSignals(False)
 
-    def get_value(self):
+    def get_value(self) -> float:
         return self.slider.value() / 6.0
-    
-    def set_locked(self, locked):
+
+    def set_locked(self, locked: bool):
         self.slider.setEnabled(not locked)
 
-    def apply_theme(self, theme):
-        self.val_label.setStyleSheet(f"background: transparent; color: {theme['accent']}; font-weight: bold; font-size: 11px;")
-        self.day_label.setStyleSheet(f"background: transparent; color: {theme['text_main']}; font-size: 12px;") 
-        
-        # Refined Slider Style (Thermometer Strategy)
-        # To fix artifacts where the Bar meets the Round Handle:
-        # 1. Sub-page top is FLAT (radius 0). Bottom is ROUND.
-        # 2. Handle is CIRCLE.
-        # 3. Handle sits on top of the flat sub-page end, creating a perfect continuous capsule.
+    def _apply_theme(self, theme):
+        self.val_label.setStyleSheet(
+            f"color: {theme['accent']}; font-weight: bold; font-size: 11px; background: transparent;")
+        self.day_label.setStyleSheet(
+            f"color: {theme['text_main']}; font-size: 12px; background: transparent;")
         self.slider.setStyleSheet(f"""
             QSlider::groove:vertical {{
-                background: {theme['bg_ter']};
-                width: 16px; 
-                border-radius: 8px;
+                background: {theme['bg_ter']}; width: 14px; border-radius: 7px;
             }}
             QSlider::sub-page:vertical {{
                 background: {theme['accent']};
-                border-bottom-left-radius: 8px;
-                border-bottom-right-radius: 8px;
-                border-top-left-radius: 0px;
-                border-top-right-radius: 0px;
-            }}
-            QSlider::add-page:vertical {{
-                background: transparent;
-                border-radius: 8px;
+                border-bottom-left-radius: 7px; border-bottom-right-radius: 7px;
+                border-top-left-radius: 0px; border-top-right-radius: 0px;
             }}
             QSlider::handle:vertical {{
-                background: {theme['accent']};
-                height: 16px; 
-                width: 16px;
-                border-radius: 8px;
-                margin: 0px; 
-                border: none;
+                background: {theme['accent']}; height: 14px; width: 14px;
+                border-radius: 7px; margin: 0px; border: none;
             }}
-            QSlider::sub-page:vertical:disabled {{
-                background: {theme['text_sec']};
-            }}
-            QSlider::handle:vertical:disabled {{
-                background: {theme['text_sec']};
-            }}
+            QSlider::sub-page:vertical:disabled {{ background: {theme['text_sec']}; }}
+            QSlider::handle:vertical:disabled {{ background: {theme['text_sec']}; }}
         """)
 
-class DashboardCard(QFrame):
-    """
-    Base Card Class for unified styling.
-    Has a Title Header and a Content Area.
-    """
-    def __init__(self, title, icon="", parent=None, header_controls=None):
+
+# ==================== 横向每日滑块（新版） ====================
+
+class DaySlider(QWidget):
+    """单日学习时长滑块（横向，紧凑 — 用于周计划每日微调）"""
+    value_changed = Signal(float)
+
+    def __init__(self, day_name: str, parent=None):
         super().__init__(parent)
-        self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(0, 0, 0, 0) # Outer margins handled by parent layout spacing? No, card has concise internal
-        self.main_layout.setSpacing(0)
-        
-        # Header
-        self.header_frame = QWidget()
-        self.header_layout = QHBoxLayout(self.header_frame)
-        self.header_layout.setContentsMargins(20, 15, 20, 10)
-        self.header_layout.setSpacing(10)
-        
-        # Icon + Title
-        full_title = f"{icon} {title}" if icon else title
-        self.title_label = QLabel(full_title)
-        self.title_label.setObjectName("CardTitle")
-        self.header_layout.addWidget(self.title_label)
-        
-        self.header_layout.addStretch()
-        
-        # Optional Controls in Header
-        if header_controls:
-            for c in header_controls:
-                self.header_layout.addWidget(c)
-                
-        self.main_layout.addWidget(self.header_frame)
-        
-        # Divider? Optional. Let's start without.
-        
-        # Content
-        self.content_widget = QWidget()
-        self.content_layout = QVBoxLayout(self.content_widget)
-        self.content_layout.setContentsMargins(20, 10, 20, 20)
-        self.content_layout.setSpacing(15)
-        self.main_layout.addWidget(self.content_widget)
-        
-        theme_manager.theme_changed.connect(self.apply_theme)
-        
-    def apply_theme(self, theme):
-        self.setStyleSheet(f"""
-            DashboardCard {{
-                background-color: {theme['bg_sec']};
-                border-radius: 12px;
-                border: 1px solid {theme['border']};
+        self.setFixedWidth(72)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(1)
+        layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+        self.day_label = QLabel(day_name)
+        self.day_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.day_label.setFont(get_font("Bold", 11))
+        layout.addWidget(self.day_label, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        self.slider = ClickableSlider(Qt.Orientation.Horizontal)
+        self.slider.setRange(0, 72)       # 0–12h, 10min/step
+        self.slider.setSingleStep(3)       # 0.5h
+        self.slider.setPageStep(6)         # 1h
+        self.slider.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.slider.setFixedHeight(20)
+        self.slider.valueChanged.connect(self._on_slider_change)
+        layout.addWidget(self.slider, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        self.val_label = QLabel("0h")
+        self.val_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.val_label.setFont(get_font("Bold", 10))
+        layout.addWidget(self.val_label, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        theme_manager.theme_changed.connect(self._apply_theme)
+        self._apply_theme(theme_manager.get_theme())
+
+    def _on_slider_change(self, val: int):
+        hours = val / 6.0
+        self.val_label.setText(f"{int(hours)}h" if hours == int(hours) else f"{hours:.1f}h")
+        self.value_changed.emit(hours)
+
+    def set_value(self, hours: float):
+        self.slider.blockSignals(True)
+        self.slider.setValue(min(int(hours * 6), 72))
+        self.slider.blockSignals(False)
+        h = self.slider.value() / 6.0
+        self.val_label.setText(f"{int(h)}h" if h == int(h) else f"{h:.1f}h")
+
+    def get_value(self) -> float:
+        return self.slider.value() / 6.0
+
+    def set_enabled(self, enabled: bool):
+        self.slider.setEnabled(enabled)
+
+    def _apply_theme(self, theme):
+        self.day_label.setStyleSheet(
+            f"color: {theme['text_main']}; background: transparent; border: none;")
+        self.val_label.setStyleSheet(
+            f"color: {theme['accent']}; background: transparent; border: none;")
+        self.slider.setStyleSheet(f"""
+            QSlider::groove:horizontal {{
+                background: {theme['bg_ter']}; height: 6px; border-radius: 3px;
             }}
-            QLabel#CardTitle {{
-                color: {theme['text_main']};
-                font-size: 14px;
-                font-weight: bold;
-                background: transparent;
+            QSlider::sub-page:horizontal {{
+                background: {theme['accent']};
+                border-top-left-radius: 3px; border-bottom-left-radius: 3px;
             }}
+            QSlider::handle:horizontal {{
+                background: {theme['accent']}; width: 14px; height: 14px;
+                border-radius: 7px; margin: -4px 0px; border: none;
+            }}
+            QSlider::sub-page:horizontal:disabled {{ background: {theme['text_sec']}; }}
+            QSlider::handle:horizontal:disabled {{ background: {theme['text_sec']}; }}
         """)
 
 
-class CourseHeatMap(DashboardCard):
-    def __init__(self, parent=None):
-        super().__init__("学习投入热力图", "🔥", parent)
-        self.daily_stats = {}
-        self.target = 1.0 
-        
-        self.heatmap_area = QWidget()
-        self.heatmap_area.setMinimumHeight(120) 
-        self.content_layout.addWidget(self.heatmap_area)
+# ==================== 统计卡片 ====================
 
-    def set_data(self, daily_stats, target_hours):
-        self.daily_stats = daily_stats
-        self.target = target_hours if target_hours > 0 else 1.0
-        self.heatmap_area.update()
-        
-    def resizeEvent(self, event):
-        self.heatmap_area.update()
-        super().resizeEvent(event) # Card resize
+class _StatCard(QFrame):
+    """单张统计卡片"""
 
-    # Move paint to the inner widget
-    # But wait, DashboardCard structure uses widget. We need to install EventFilter or subclass widget.
-    # Simpler: Subclass DashboardCard but paint on content_widget? Or just custom widget inside.
-    # Let's make heatmap_area a custom class OR use event filter.
-    # Custom class is cleaner.
-    
-    # Actually, let's just make HeatmapArea widget inline here
-    
-        self.heatmap_area.paintEvent = self.paint_heatmap
-        
-    def paint_heatmap(self, event):
-        painter = QPainter(self.heatmap_area)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        theme = theme_manager.get_theme()
-        
-        # Calculate Layout
-        w = self.heatmap_area.width()
-        h = self.heatmap_area.height()
-        
-        today = date.today()
-        months_to_show = 12
-        start_month = today.replace(day=1)
-        for _ in range(months_to_show - 1):
-            first = start_month.replace(day=1)
-            prev = first - timedelta(days=1)
-            start_month = prev.replace(day=1)
-            
-        gap_x = 8
-        # Try to fit 12 blocks
-        # block_width * 12 + 11 * 8 = w
-        block_width = (w - (months_to_show - 1) * gap_x) / months_to_show
-        
-        cell_gap = 2
-        # A block is 7 cells vertical? No, Heatmap is usually Week(Col) x Day(Row)? or Day(Col) x Week(Row)?
-        # Our previous implementation: 
-        # Left-Right = Weeks/Blocks.
-        # Vertical = Days (Mon-Sun).
-        # So width of block depends on how many weeks in that month. Usually 4-6.
-        # Fixed cell size looks better than stretchy.
-        
-        cell_size = 10
-        # Check if we can fit?
-        # If w is large, centered.
-        
-        # Max width needed approx: 12 * (5*12) approx 800px.
-        start_x = 0
-        start_y = 10
-        
-        base_color = QColor(theme['bg_ter'])
-        c1 = QColor(theme['accent']); c1.setAlpha(60)
-        c2 = QColor(theme['accent']); c2.setAlpha(120)
-        c3 = QColor(theme['accent']); c3.setAlpha(180)
-        c4 = QColor(theme['accent'])
-        
-        current_m = start_month
-        
-        for i in range(months_to_show):
-            # Month Label
-            month_str = current_m.strftime("%Y-%m")
-            painter.setPen(QColor(theme['text_sec']))
-            font = painter.font(); font.setPointSize(8); painter.setFont(font)
-            
-            # Position: relative to block
-            # Block width estimation: 5 weeks?
-            weeks_in_month = 5 # approx
-            bw = weeks_in_month * (cell_size + cell_gap)
-            
-            bx = start_x + i * (bw + gap_x)
-            
-            painter.drawText(bx, start_y - 4, month_str)
-            
-            # Draw Data
-            first_day_wd = current_m.weekday() 
-            iter_date = current_m
-            
-            while iter_date.month == current_m.month:
-                day_idx = iter_date.day - 1
-                rel_day = (day_idx + first_day_wd)
-                col = rel_day // 7 
-                row = rel_day % 7
-                
-                dx = bx + col * (cell_size + cell_gap)
-                dy = start_y + row * (cell_size + cell_gap)
-                
-                d_str = iter_date.strftime("%Y-%m-%d")
-                secs = self.daily_stats.get(d_str, 0)
-                hours = secs / 3600
-                
-                painter.setBrush(QBrush(base_color))
-                if hours > 0:
-                    ratio = hours / self.target
-                    if ratio >= 2.0: painter.setBrush(QBrush(c4))
-                    elif ratio >= 1.0: painter.setBrush(QBrush(c3))
-                    elif ratio >= 0.5: painter.setBrush(QBrush(c2))
-                    else: painter.setBrush(QBrush(c1))
-                else: 
-                     painter.setBrush(QBrush(base_color))
-                
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.drawRoundedRect(dx, dy, cell_size, cell_size, 2, 2)
-                
-                iter_date += timedelta(days=1)
-            
-            # Next Month
-            if current_m.month == 12:
-                current_m = current_m.replace(year=current_m.year+1, month=1)
-            else:
-                current_m = current_m.replace(month=current_m.month+1)
+    def __init__(self, icon: str, title: str, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(115)
+        self.setObjectName("StatCard")
 
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 14, 20, 14)
+        layout.setSpacing(6)
 
-from views.widgets.ela_date_picker import ElaDatePicker
+        header = QHBoxLayout()
+        header.setSpacing(6)
+        icon_label = QLabel(icon)
+        icon_label.setFont(QFont("Segoe UI Emoji", 14))
+        header.addWidget(icon_label)
+        title_label = QLabel(title)
+        title_label.setFont(get_font("Regular", 11))
+        title_label.setObjectName("cardTitle")
+        header.addWidget(title_label)
+        header.addStretch()
+        layout.addLayout(header)
 
-# ...
+        self.value_label = QLabel("--")
+        self.value_label.setFont(get_font("Bold", 20))
+        self.value_label.setObjectName("cardValue")
+        layout.addWidget(self.value_label)
 
-class StatsPanel(DashboardCard):
-    start_date_changed = Signal(str)
+        self.sub_label = QLabel("")
+        self.sub_label.setFont(get_font("Regular", 10))
+        self.sub_label.setObjectName("cardSub")
+        layout.addWidget(self.sub_label)
 
-    def __init__(self, parent=None):
-        super().__init__("数据总览", "📊", parent)
-        
-        # Grid Layout for boxes
-        self.grid = QGridLayout()
-        self.grid.setSpacing(15)
-        self.content_layout.addLayout(self.grid)
-        
-        self.stat_widgets = {} 
-        
-        # 1. Start Date (0,0) - (0,1)
-        self.start_date_cont = self.create_box("🚩 开始日期")
-        self.date_edit = ElaDatePicker()
-        self.date_edit.dateChanged.connect(self.on_date_changed)
-        self.start_date_cont.layout().addWidget(self.date_edit)
-        self.grid.addWidget(self.start_date_cont, 0, 0)
-        
-        # ... (Rest of init unchanged)
-        
-        # 2. Finish Date (0,1)
-        self.finish_cont = self.create_box("🏁 预计完成", "--", "")
-        self.stat_widgets["finish"] = self.finish_cont.findChild(QLabel, "val")
-        self.grid.addWidget(self.finish_cont, 0, 1)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setFixedHeight(4)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        layout.addWidget(self.progress_bar)
 
-        # 3. Progress (0,2)
-        self.progress_cont = self.create_box("📚 视频进度", "--/--", "个")
-        self.stat_widgets["progress"] = self.progress_cont.findChild(QLabel, "val")
-        self.grid.addWidget(self.progress_cont, 0, 2)
-        
-        # Row 2
-        # 4. Duration (1,0)
-        self.duration_cont = self.create_box("⏱ 总时长", "--", "小时")
-        self.stat_widgets["duration"] = self.duration_cont.findChild(QLabel, "val")
-        self.grid.addWidget(self.duration_cont, 1, 0)
-        
-        # 5. Today (1,1)
-        self.today_cont = self.create_box("📅 今日概览", "--", "小时")
-        self.stat_widgets["today"] = self.today_cont.findChild(QLabel, "val")
-        self.grid.addWidget(self.today_cont, 1, 1)
-        
-        # 6. Balance (1,2)
-        self.bal_cont = self.create_box("⚖ 学习余额", "+0.0", "小时")
-        self.stat_widgets["balance"] = self.bal_cont.findChild(QLabel, "val")
-        self.grid.addWidget(self.bal_cont, 1, 2)
-        
-        theme_manager.theme_changed.connect(self.update_style)
+        theme_manager.theme_changed.connect(self._apply_theme)
+        self._apply_theme(theme_manager.get_theme())
 
-    def create_box(self, title, val_text=None, unit_text=None):
-        f = QFrame()
-        f.setObjectName("StatBox") 
-        l = QVBoxLayout(f)
-        l.setContentsMargins(15, 12, 15, 12)
-        l.setSpacing(4)
-        
-        t = QLabel(title)
-        t.setObjectName("title")
-        l.addWidget(t)
-        
-        if val_text is not None:
-            v = QLabel(val_text)
-            v.setObjectName("val")
-            l.addWidget(v)
-            
-        if unit_text:
-            u = QLabel(unit_text)
-            u.setObjectName("unit")
-            l.addWidget(u)
-            
-        # Make it expand
-        f.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        return f
-
-    def update_style(self, theme):
-        # Specific styling for StatBoxes if needed, DashboardCard handles main bg
-        box_style = f"""
-            QFrame#StatBox {{
-                background-color: {theme['bg_ter']};
-                border-radius: 8px;
-            }}
-            QLabel#title {{ color: {theme['text_sec']}; font-size: 12px; }}
-            QLabel#val {{ color: {theme['text_main']}; font-size: 18px; font-weight: bold; font-family: 'Segoe UI'; }}
-            QLabel#unit {{ color: {theme['text_sec']}; font-size: 10px; }}
-        """
-        for w in self.findChildren(QFrame, "StatBox"):
-            w.setStyleSheet(box_style)
-            
-        # ElaDatePicker handles its own style via ElaTheme, no need for manual QDateEdit stylesheet here.
-
-    def on_date_changed(self, qdate):
-        self.start_date_changed.emit(qdate.toString(Qt.DateFormat.ISODate))
-
-    def update_stats(self, balance, done_v, total_v, done_h, total_h, today_h, plan_h, estimated_finish_str):
-        self.stat_widgets["progress"].setText(f"{done_v}/{total_v}")
-        self.stat_widgets["duration"].setText(f"{done_h:.1f}/{total_h:.1f}")
-        self.stat_widgets["today"].setText(f"{today_h:.1f}/{plan_h:.1f}")
-        
-        bal_str = f"+{balance:.1f}" if balance >= 0 else f"{balance:.1f}"
-        self.stat_widgets["balance"].setText(bal_str)
-        color = theme_manager.get_theme()['accent'] if balance >= 0 else theme_manager.get_theme()['danger']
-        self.stat_widgets["balance"].setStyleSheet(f"color: {color}; font-size: 18px; font-weight: bold; font-family: 'Segoe UI';")
-        
-        self.stat_widgets["finish"].setText(estimated_finish_str)
-    
-    def set_start_date(self, iso_date):
-        if iso_date:
-            d = QDate.fromString(iso_date, Qt.DateFormat.ISODate)
-            self.date_edit.blockSignals(True)
-            self.date_edit.setDate(d)
-            self.date_edit.blockSignals(False)
-        else:
-            self.date_edit.setDate(QDate.currentDate())
-
-
-class WeeklyScheduleWidget(DashboardCard):
-    schedule_changed = Signal()
-
-    def __init__(self, parent=None):
-        # Prepare header controls
-        self.btn_lock_work = self.create_toggle_btn("锁定工作日")
-        self.btn_lock_weekend = self.create_toggle_btn("锁定双休日")
-        
-        self.btn_lock_plan = QPushButton("🔒 锁定计划")
-        self.btn_lock_plan.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_lock_plan.setCheckable(True)
-        self.btn_lock_plan.clicked.connect(self.toggle_plan_lock)
-        
-        theme_manager.theme_changed.connect(self.update_control_style) # Bind theme
-        
-        controls = [self.btn_lock_work, self.btn_lock_weekend, self.btn_lock_plan]
-        
-        super().__init__("学习计划表 (拖动调整)", "📅", parent, header_controls=controls)
-        
-        self.is_plan_locked = False
-        
-        # Sliders in content
-        self.sliders_layout = QHBoxLayout()
-        self.sliders_layout.setSpacing(10)
-        self.content_layout.addLayout(self.sliders_layout)
-        
-        self.days = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-        self.slider_widgets = []
-        self.current_updating = False
-        
-        for i, day in enumerate(self.days):
-            sw = DailySlider(day)
-            sw.value_changed.connect(lambda v, idx=i: self.on_day_change(idx, v))
-            self.slider_widgets.append(sw)
-            self.sliders_layout.addWidget(sw)
-            
-        # Initial style
-        self.update_control_style(theme_manager.get_theme())
-
-    def create_toggle_btn(self, text):
-        btn = QPushButton(text)
-        btn.setCheckable(True)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setFixedHeight(26)
-        return btn
-        
-    def update_control_style(self, theme):
-        # Button Styles
-        lock_btn_style = f"""
-            QPushButton {{
-                background-color: {theme['bg_ter']};
-                color: {theme['text_sec']};
+    def _apply_theme(self, theme):
+        self.setStyleSheet(f"""
+            _StatCard {{
+                background-color: {theme['bg_sec']};
                 border: 1px solid {theme['border']};
-                border-radius: 13px; 
-                padding: 4px 12px;
+                border-radius: 12px;
+            }}
+            QLabel#cardTitle {{ color: {theme['text_sec']}; background: transparent; border: none; }}
+            QLabel#cardValue {{ color: {theme['text_main']}; background: transparent; border: none; }}
+            QLabel#cardSub {{ color: {theme['text_sec']}; background: transparent; border: none; }}
+        """)
+        self.progress_bar.setStyleSheet(f"""
+            QProgressBar {{
+                background-color: {theme['bg_ter']};
+                border-radius: 2px; border: none;
+            }}
+            QProgressBar::chunk {{
+                background-color: {theme['accent']};
+                border-radius: 2px;
+            }}
+        """)
+
+    def set_value(self, main_text: str, sub_text: str = "", progress: int = 0):
+        self.value_label.setText(main_text)
+        self.sub_label.setText(sub_text)
+        self.progress_bar.setValue(max(0, min(100, progress)))
+
+
+class StatsRow(QWidget):
+    """4 张统计卡片行"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(15)
+
+        self.cards = {}
+        specs = [
+            ("progress", "📚", "视频进度"),
+            ("duration", "⏱", "累计时长"),
+            ("today", "📅", "今日概览"),
+            ("balance", "⚖", "学习余额"),
+        ]
+        for key, icon, title in specs:
+            card = _StatCard(icon, title)
+            self.cards[key] = card
+            layout.addWidget(card, 1)
+
+    def update_stats(self, **kwargs):
+        for key, card in self.cards.items():
+            if key in kwargs:
+                card.set_value(*kwargs[key])
+
+
+
+# ==================== 学习计划编辑弹窗 ====================
+
+class PlanEditDialog(QDialog):
+    """更改学习计划 — 模态编辑弹窗
+
+    包含原学习计划卡片的所有编辑功能：
+    - 开始日期选择器
+    - 双页签：整体调节（预设 + 组滑块）/ 每日微调（7 个独立滑块）
+    - 取消 / 确认更改 按钮
+    """
+    PRESETS: list[tuple[str, float]] = [
+        ("清空", 0.0),
+        ("0.5h/天", 0.5),
+        ("1h/天", 1.0),
+        ("2h/天", 2.0),
+        ("3h/天", 3.0),
+    ]
+
+    PAGE_GROUP = 0
+    PAGE_DAILY = 1
+
+    def __init__(self, schedule: list, start_date_iso: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("更改学习计划")
+        self.setModal(True)
+        self.setMinimumWidth(680)
+        self.setMinimumHeight(520)
+
+        self._updating = False
+        self._start_date_iso = start_date_iso
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(28, 22, 28, 22)
+        main_layout.setSpacing(14)
+
+        # ---- 日期行 ----
+        date_row = QHBoxLayout()
+        date_row.setSpacing(10)
+        date_icon = QLabel("📅 开始日期")
+        date_icon.setFont(get_font("Regular", 12))
+        date_icon.setObjectName("planTitle")
+        date_row.addWidget(date_icon)
+        self.date_picker = ElaDatePicker()
+        self.date_picker.setFixedHeight(32)
+        if start_date_iso:
+            try:
+                d = datetime.fromisoformat(start_date_iso).date()
+                self.date_picker.setDate(QDate(d.year, d.month, d.day))
+            except (ValueError, TypeError):
+                self.date_picker.setDate(QDate.currentDate())
+        else:
+            self.date_picker.setDate(QDate.currentDate())
+        self.date_picker.dateChanged.connect(self._on_date_changed)
+        date_row.addWidget(self.date_picker)
+        date_row.addStretch()
+        main_layout.addLayout(date_row)
+
+        # ---- 页签切换按钮 ----
+        tab_row = QHBoxLayout()
+        tab_row.setSpacing(8)
+        self.btn_group = QPushButton("🎯 整体调节")
+        self.btn_group.setCheckable(True)
+        self.btn_group.setChecked(True)
+        self.btn_group.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_group.setFont(get_font("Bold", 11))
+        self.btn_group.setFixedHeight(30)
+        self.btn_group.clicked.connect(lambda: self._switch_page(self.PAGE_GROUP))
+        tab_row.addWidget(self.btn_group)
+
+        self.btn_daily = QPushButton("📋 每日微调")
+        self.btn_daily.setCheckable(True)
+        self.btn_daily.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_daily.setFont(get_font("Bold", 11))
+        self.btn_daily.setFixedHeight(30)
+        self.btn_daily.clicked.connect(lambda: self._switch_page(self.PAGE_DAILY))
+        tab_row.addWidget(self.btn_daily)
+        tab_row.addStretch()
+        main_layout.addLayout(tab_row)
+
+        # ---- 双页签内容 ----
+        self.stack = QStackedWidget()
+        self.stack.setObjectName("planStack")
+
+        # --- 页签 1：整体调节 ---
+        page_group = QWidget()
+        pg_layout = QVBoxLayout(page_group)
+        pg_layout.setContentsMargins(0, 6, 0, 0)
+        pg_layout.setSpacing(10)
+
+        # 预设方案
+        preset_row = QHBoxLayout()
+        preset_row.setSpacing(8)
+        preset_icon = QLabel("📦 预设方案")
+        preset_icon.setFont(get_font("Regular", 12))
+        preset_icon.setObjectName("fieldLabel")
+        preset_row.addWidget(preset_icon)
+
+        self._preset_buttons: list[QPushButton] = []
+        for label, hours in self.PRESETS:
+            btn = QPushButton(label)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFont(get_font("Medium", 10))
+            btn.setFixedHeight(28)
+            btn.clicked.connect(lambda checked, h=hours: self._apply_preset(h))
+            self._preset_buttons.append(btn)
+            preset_row.addWidget(btn)
+        preset_row.addStretch()
+        pg_layout.addLayout(preset_row)
+
+        # 工作日组滑块
+        wd_row = QHBoxLayout()
+        wd_row.setSpacing(12)
+        wd_icon = QLabel("🎯 工作日")
+        wd_icon.setFont(get_font("Regular", 12))
+        wd_icon.setObjectName("fieldLabel")
+        wd_row.addWidget(wd_icon)
+
+        self.weekday_slider = ClickableSlider(Qt.Orientation.Horizontal)
+        self.weekday_slider.setRange(0, 72)
+        self.weekday_slider.setSingleStep(3)
+        self.weekday_slider.setPageStep(6)
+        self.weekday_slider.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.weekday_slider.setFixedHeight(28)
+        self.weekday_slider.valueChanged.connect(self._on_weekday_change)
+        wd_row.addWidget(self.weekday_slider, 1)
+
+        self.weekday_value_label = QLabel("0.0 小时/天")
+        self.weekday_value_label.setFont(get_font("Bold", 12))
+        self.weekday_value_label.setObjectName("groupValue")
+        self.weekday_value_label.setMinimumWidth(85)
+        self.weekday_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        wd_row.addWidget(self.weekday_value_label)
+
+        wd_hint = QLabel("周一至周五")
+        wd_hint.setFont(get_font("Regular", 10))
+        wd_hint.setObjectName("groupHint")
+        wd_row.addWidget(wd_hint)
+        pg_layout.addLayout(wd_row)
+
+        # 周末组滑块
+        we_row = QHBoxLayout()
+        we_row.setSpacing(12)
+        we_icon = QLabel("🎯 周末")
+        we_icon.setFont(get_font("Regular", 12))
+        we_icon.setObjectName("fieldLabel")
+        we_row.addWidget(we_icon)
+
+        self.weekend_slider = ClickableSlider(Qt.Orientation.Horizontal)
+        self.weekend_slider.setRange(0, 72)
+        self.weekend_slider.setSingleStep(3)
+        self.weekend_slider.setPageStep(6)
+        self.weekend_slider.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.weekend_slider.setFixedHeight(28)
+        self.weekend_slider.valueChanged.connect(self._on_weekend_change)
+        we_row.addWidget(self.weekend_slider, 1)
+
+        self.weekend_value_label = QLabel("0.0 小时/天")
+        self.weekend_value_label.setFont(get_font("Bold", 12))
+        self.weekend_value_label.setObjectName("groupValue")
+        self.weekend_value_label.setMinimumWidth(85)
+        self.weekend_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        we_row.addWidget(self.weekend_value_label)
+
+        we_hint = QLabel("周六至周日")
+        we_hint.setFont(get_font("Regular", 10))
+        we_hint.setObjectName("groupHint")
+        we_row.addWidget(we_hint)
+        pg_layout.addLayout(we_row)
+
+        pg_layout.addStretch()
+        self.stack.addWidget(page_group)  # index 0
+
+        # --- 页签 2：每日微调 ---
+        page_daily = QWidget()
+        pd_layout = QVBoxLayout(page_daily)
+        pd_layout.setContentsMargins(0, 6, 0, 0)
+        pd_layout.setSpacing(6)
+
+        daily_hint = QLabel("拖动下方滑块独立调整每天的学习时长")
+        daily_hint.setFont(get_font("Regular", 10))
+        daily_hint.setObjectName("customTitle")
+        pd_layout.addWidget(daily_hint)
+
+        self._day_sliders: list[ClickableSlider] = []
+        self._day_value_labels: list[QLabel] = []
+        day_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+        for i, day_name in enumerate(day_names):
+            row = QHBoxLayout()
+            row.setSpacing(12)
+
+            day_label = QLabel(day_name)
+            day_label.setFont(get_font("Bold", 11))
+            day_label.setObjectName("dayName")
+            day_label.setFixedWidth(36)
+            day_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            row.addWidget(day_label)
+
+            slider = ClickableSlider(Qt.Orientation.Horizontal)
+            slider.setRange(0, 72)
+            slider.setSingleStep(3)
+            slider.setPageStep(6)
+            slider.setCursor(Qt.CursorShape.PointingHandCursor)
+            slider.setFixedHeight(24)
+            slider.valueChanged.connect(lambda v, idx=i: self._on_day_change(idx, v))
+            row.addWidget(slider, 1)
+            self._day_sliders.append(slider)
+
+            value_label = QLabel("0h")
+            value_label.setFont(get_font("Bold", 12))
+            value_label.setObjectName("dayValue")
+            value_label.setFixedWidth(40)
+            value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            row.addWidget(value_label)
+            self._day_value_labels.append(value_label)
+
+            pd_layout.addLayout(row)
+
+        pd_layout.addStretch()
+        self.stack.addWidget(page_daily)  # index 1
+
+        self.stack.setCurrentIndex(self.PAGE_GROUP)
+        main_layout.addWidget(self.stack, 1)
+
+        # ---- 底部按钮 ----
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(12)
+        btn_row.addStretch()
+
+        self.btn_cancel = QPushButton("取消")
+        self.btn_cancel.setFixedHeight(34)
+        self.btn_cancel.setMinimumWidth(80)
+        self.btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_cancel.setFont(get_font("Medium", 11))
+        self.btn_cancel.clicked.connect(self.reject)
+        btn_row.addWidget(self.btn_cancel)
+
+        self.btn_confirm = QPushButton("确认更改")
+        self.btn_confirm.setFixedHeight(34)
+        self.btn_confirm.setMinimumWidth(100)
+        self.btn_confirm.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_confirm.setFont(get_font("Bold", 11))
+        self.btn_confirm.setDefault(True)
+        self.btn_confirm.clicked.connect(self.accept)
+        btn_row.addWidget(self.btn_confirm)
+
+        main_layout.addLayout(btn_row)
+
+        # ---- 初始化滑块值 ----
+        self._init_values(schedule)
+
+        theme_manager.theme_changed.connect(self._apply_theme)
+        self._apply_theme(theme_manager.get_theme())
+
+    # ==================== 公共接口 ====================
+
+    def get_plan(self) -> tuple:
+        """返回 (schedule_list[7], start_date_iso)"""
+        return ([s.value() / 6.0 for s in self._day_sliders], self._start_date_iso)
+
+    # ==================== 内部初始化 ====================
+
+    def _init_values(self, schedule: list):
+        """用传入的 schedule 数据初始化所有滑块"""
+        self._updating = True
+        for slider, val in zip(self._day_sliders, schedule):
+            slider.blockSignals(True)
+            slider.setValue(min(int(float(val) * 6), 72))
+            slider.blockSignals(False)
+
+        self.weekday_slider.blockSignals(True)
+        self.weekday_slider.setValue(min(int(float(schedule[0]) * 6), 72))
+        self.weekday_slider.blockSignals(False)
+        self.weekend_slider.blockSignals(True)
+        self.weekend_slider.setValue(min(int(float(schedule[5]) * 6), 72))
+        self.weekend_slider.blockSignals(False)
+
+        self._update_all_labels()
+        self._updating = False
+
+    # ==================== 页签切换 ====================
+
+    def _switch_page(self, page: int):
+        self.stack.setCurrentIndex(page)
+        self.btn_group.setChecked(page == self.PAGE_GROUP)
+        self.btn_daily.setChecked(page == self.PAGE_DAILY)
+
+    # ==================== 日期 ====================
+
+    def _on_date_changed(self, qdate: QDate):
+        if self._updating:
+            return
+        self._start_date_iso = qdate.toString(Qt.DateFormat.ISODate)
+
+    # ==================== 预设 ====================
+
+    def _apply_preset(self, hours_per_day: float):
+        if self._updating:
+            return
+        self._updating = True
+
+        val = int(hours_per_day * 6)
+        for slider in self._day_sliders:
+            slider.blockSignals(True)
+            slider.setValue(val)
+            slider.blockSignals(False)
+
+        self.weekday_slider.blockSignals(True)
+        self.weekday_slider.setValue(val)
+        self.weekday_slider.blockSignals(False)
+        self.weekend_slider.blockSignals(True)
+        self.weekend_slider.setValue(val)
+        self.weekend_slider.blockSignals(False)
+
+        self._update_all_labels()
+        self._updating = False
+
+    # ==================== 组滑块（页签 1） ====================
+
+    def _on_weekday_change(self, val: int):
+        if self._updating:
+            return
+        self._updating = True
+        for i in range(5):
+            self._day_sliders[i].blockSignals(True)
+            self._day_sliders[i].setValue(val)
+            self._day_sliders[i].blockSignals(False)
+        self._updating = False
+        self._update_all_labels()
+
+    def _on_weekend_change(self, val: int):
+        if self._updating:
+            return
+        self._updating = True
+        for i in range(5, 7):
+            self._day_sliders[i].blockSignals(True)
+            self._day_sliders[i].setValue(val)
+            self._day_sliders[i].blockSignals(False)
+        self._updating = False
+        self._update_all_labels()
+
+    # ==================== 每日滑块（页签 2） ====================
+
+    def _on_day_change(self, idx: int, val: int):
+        if self._updating:
+            return
+        self._updating = True
+        if idx == 0:
+            self.weekday_slider.blockSignals(True)
+            self.weekday_slider.setValue(val)
+            self.weekday_slider.blockSignals(False)
+        elif idx == 5:
+            self.weekend_slider.blockSignals(True)
+            self.weekend_slider.setValue(val)
+            self.weekend_slider.blockSignals(False)
+        self._updating = False
+        self._update_all_labels()
+
+    # ==================== 标签刷新 ====================
+
+    def _update_all_labels(self):
+        """刷新所有滑块的值标签"""
+        for slider, label in zip(self._day_sliders, self._day_value_labels):
+            hours = slider.value() / 6.0
+            label.setText(f"{int(hours)}h" if hours == int(hours) else f"{hours:.1f}h")
+        self._update_group_labels()
+
+    def _update_group_labels(self):
+        """刷新组滑块的值标签"""
+        wd = self.weekday_slider.value() / 6.0
+        we = self.weekend_slider.value() / 6.0
+        self.weekday_value_label.setText(f"{wd:.1f} 小时/天")
+        self.weekend_value_label.setText(f"{we:.1f} 小时/天")
+
+    # ==================== 主题 ====================
+
+    def _apply_theme(self, theme: dict):
+        self.setStyleSheet(f"""
+            PlanEditDialog {{
+                background-color: {theme['bg_sec']};
+                border: 1px solid {theme['border']};
+                border-radius: 12px;
+            }}
+            QLabel#planTitle {{
+                color: {theme['text_main']}; background: transparent; border: none;
+                font-weight: bold; font-size: 13px;
+            }}
+            QLabel#fieldLabel {{
+                color: {theme['text_sec']}; background: transparent; border: none;
+                font-size: 12px;
+            }}
+            QLabel#groupValue {{
+                color: {theme['accent']}; background: transparent; border: none;
+                font-weight: bold; font-size: 12px;
+            }}
+            QLabel#groupHint {{
+                color: {theme['text_sec']}; background: transparent; border: none;
+                font-size: 10px;
+            }}
+            QLabel#dayName {{
+                color: {theme['text_main']}; background: transparent; border: none;
                 font-size: 11px;
             }}
-            QPushButton:checked {{
+            QLabel#dayValue {{
+                color: {theme['accent']}; background: transparent; border: none;
+                font-size: 12px;
+            }}
+            QLabel#customTitle {{
+                color: {theme['text_sec']}; background: transparent; border: none;
+                font-size: 10px; font-style: italic;
+            }}
+            #planStack {{ background: transparent; border: none; }}
+        """)
+
+        # 水平滑块统一样式
+        h_slider_qss = f"""
+            QSlider::groove:horizontal {{
+                background: {theme['bg_ter']}; height: 6px; border-radius: 3px;
+            }}
+            QSlider::sub-page:horizontal {{
+                background: {theme['accent']};
+                border-top-left-radius: 3px; border-bottom-left-radius: 3px;
+            }}
+            QSlider::handle:horizontal {{
+                background: {theme['accent']}; width: 16px; height: 16px;
+                border-radius: 8px; margin: -5px 0px; border: none;
+            }}
+        """
+        self.weekday_slider.setStyleSheet(h_slider_qss)
+        self.weekend_slider.setStyleSheet(h_slider_qss)
+        for slider in self._day_sliders:
+            slider.setStyleSheet(h_slider_qss)
+
+        # 页签切换按钮
+        tab_active = f"""
+            QPushButton {{
                 background-color: {theme['accent']};
                 color: white;
-                border: 1px solid {theme['accent']};
-            }}
-            QPushButton:hover:!checked {{
-                border: 1px solid {theme['accent']};
-                color: {theme['accent']};
+                border: none;
+                border-radius: 8px;
+                padding: 4px 14px;
+                font-size: 11px;
             }}
         """
-        self.btn_lock_work.setStyleSheet(lock_btn_style)
-        self.btn_lock_weekend.setStyleSheet(lock_btn_style)
-        
-        plan_lock_style = f"""
+        tab_inactive = f"""
+            QPushButton {{
+                background-color: {theme['bg_ter']};
+                color: {theme['text_sec']};
+                border: none;
+                border-radius: 8px;
+                padding: 4px 14px;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                color: {theme['text_main']};
+            }}
+        """
+        self.btn_group.setStyleSheet(tab_active if self.btn_group.isChecked() else tab_inactive)
+        self.btn_daily.setStyleSheet(tab_inactive if self.btn_group.isChecked() else tab_active)
+
+        # 预设按钮
+        preset_qss = f"""
             QPushButton {{
                 background-color: {theme['bg_ter']};
                 color: {theme['text_sec']};
                 border: 1px solid {theme['border']};
-                border-radius: 13px;
-                padding: 4px 12px;
-                font-weight: bold;
-                font-size: 11px;
+                border-radius: 6px;
+                padding: 3px 10px;
+                font-size: 10px;
             }}
-            QPushButton:checked {{
-                background-color: {theme['danger']};
-                color: white;
-                border: 1px solid {theme['danger']};
-            }}
-            QPushButton:hover:!checked {{
-                border: 1px solid {theme['danger']};
-                color: {theme['danger']};
+            QPushButton:hover {{
+                background-color: {theme['border']};
+                color: {theme['text_main']};
             }}
         """
-        self.btn_lock_plan.setStyleSheet(plan_lock_style)
+        for btn in self._preset_buttons:
+            btn.setStyleSheet(preset_qss)
 
-    def toggle_plan_lock(self, checked):
-        self.is_plan_locked = checked
-        self.btn_lock_plan.setText("🔒 已锁定" if checked else "🔓 锁定计划")
-        for sw in self.slider_widgets:
-            sw.set_locked(checked)
-            
-    def on_day_change(self, msg_idx, val):
-        if self.current_updating: return
-        self.current_updating = True
-        
-        is_workday = 0 <= msg_idx <= 4
-        is_weekend = 5 <= msg_idx <= 6
-        
-        if is_workday and self.btn_lock_work.isChecked():
-            for i in range(5):
-                if i != msg_idx:
-                    self.slider_widgets[i].set_value(val)
-                    
-        if is_weekend and self.btn_lock_weekend.isChecked():
-             for i in range(5, 7):
-                if i != msg_idx:
-                    self.slider_widgets[i].set_value(val)
-        
-        self.current_updating = False
-        self.schedule_changed.emit()
-    
-    def get_schedule(self):
-        return [sw.get_value() for sw in self.slider_widgets]
-        
-    def set_schedule(self, schedule):
-        self.current_updating = True 
-        for sw, val in zip(self.slider_widgets, schedule):
-            sw.set_value(val)
-        self.current_updating = False
+        # 底部按钮
+        cancel_qss = f"""
+            QPushButton {{
+                background-color: {theme['bg_ter']};
+                color: {theme['text_sec']};
+                border: 1px solid {theme['border']};
+                border-radius: 8px;
+                padding: 6px 18px;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                color: {theme['text_main']};
+                border-color: {theme['text_sec']};
+            }}
+        """
+        self.btn_cancel.setStyleSheet(cancel_qss)
+
+        confirm_qss = f"""
+            QPushButton {{
+                background-color: {theme['accent']};
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 6px 20px;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                background-color: {theme['text_main']};
+            }}
+        """
+        self.btn_confirm.setStyleSheet(confirm_qss)
 
 
-class PropertiesView(QWidget):
+# ==================== 学习计划卡片 ====================
+
+class StudyPlanCard(QWidget):
+    """学习计划卡片 — 只读展示 + 弹窗编辑
+
+    卡片以只读模式展示当前学习计划核心信息：
+    - 开始日期（文本）
+    - 7 天每日时长可视化（迷你进度条）
+    - 每周合计
+    - 预计完成 + 学习余额结果卡片
+    - 学习建议
+
+    点击「更改学习计划」按钮弹出 PlanEditDialog 进行编辑。
+    """
+    plan_changed = Signal(list, str)  # (schedule_list[7], start_date_iso)
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.dm = DataManager()
-        self.course_id = None
-        
-        # Main Layout: Scroll Area for robustness
+        self.setObjectName("StudyPlanCard")
+
+        self._schedule: list[float] = [0.0] * 7
+        self._start_date_iso: str = ""
+        self._balance_hours: float = 0.0
+        self._is_completed: bool = False
+        self._estimated_finish: str = "--"
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(24, 20, 24, 22)
+        main_layout.setSpacing(14)
+
+        # ========== 标题行 ==========
+        header = QHBoxLayout()
+        header.setSpacing(12)
+        title = QLabel("📋 学习计划")
+        title.setFont(get_font("Bold", 13))
+        title.setObjectName("planTitle")
+        header.addWidget(title)
+        header.addStretch()
+
+        self.btn_change = QPushButton("✏️ 更改学习计划")
+        self.btn_change.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_change.setFont(get_font("Medium", 11))
+        self.btn_change.setFixedHeight(32)
+        self.btn_change.clicked.connect(self._on_change_clicked)
+        header.addWidget(self.btn_change)
+        main_layout.addLayout(header)
+
+        # ========== 开始日期（只读文本） ==========
+        self.date_display = QLabel("📅 开始日期：未设置")
+        self.date_display.setFont(get_font("Regular", 12))
+        self.date_display.setObjectName("dateDisplay")
+        main_layout.addWidget(self.date_display)
+
+        # ========== 每日时长可视化 ==========
+        daily_container = QFrame()
+        daily_container.setObjectName("DailyBarsContainer")
+        daily_layout = QHBoxLayout(daily_container)
+        daily_layout.setContentsMargins(20, 14, 20, 14)
+        daily_layout.setSpacing(8)
+
+        self._day_bars: list[QProgressBar] = []
+        self._day_value_labels: list[QLabel] = []
+        self._day_name_labels: list[QLabel] = []
+        day_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+        for name in day_names:
+            col = QVBoxLayout()
+            col.setSpacing(3)
+            col.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+            name_label = QLabel(name)
+            name_label.setFont(get_font("Bold", 10))
+            name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            name_label.setObjectName("dayBarName")
+            col.addWidget(name_label)
+            self._day_name_labels.append(name_label)
+
+            bar = QProgressBar()
+            bar.setRange(0, 120)  # 0–12h, 步长 0.1h
+            bar.setTextVisible(False)
+            bar.setFixedHeight(10)
+            bar.setMinimumWidth(50)
+            bar.setObjectName("dayBar")
+            col.addWidget(bar)
+            self._day_bars.append(bar)
+
+            value_label = QLabel("0h")
+            value_label.setFont(get_font("Bold", 12))
+            value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            value_label.setObjectName("dayBarValue")
+            col.addWidget(value_label)
+            self._day_value_labels.append(value_label)
+
+            daily_layout.addLayout(col)
+
+        main_layout.addWidget(daily_container)
+
+        # ========== 每周合计 ==========
+        self.weekly_total_label = QLabel("📊 每周合计：0.0 小时")
+        self.weekly_total_label.setFont(get_font("Regular", 12))
+        self.weekly_total_label.setObjectName("weeklyTotal")
+        main_layout.addWidget(self.weekly_total_label)
+
+        # ========== 结果卡片（同现有逻辑） ==========
+        results_row = QHBoxLayout()
+        results_row.setSpacing(16)
+
+        self.finish_card, self._result_finish_value, self._result_finish_sub = \
+            self._make_result_card("🏁", "预计完成")
+        results_row.addWidget(self.finish_card, 1)
+
+        self.balance_card, self._result_balance_value, self._result_balance_sub = \
+            self._make_result_card("⚖", "学习余额")
+        results_row.addWidget(self.balance_card, 1)
+        main_layout.addLayout(results_row)
+
+        # ========== 学习建议 ==========
+        self.suggestion_label = QLabel("")
+        self.suggestion_label.setFont(get_font("Regular", 10))
+        self.suggestion_label.setWordWrap(True)
+        self.suggestion_label.setObjectName("suggestionLabel")
+        main_layout.addWidget(self.suggestion_label)
+
+        theme_manager.theme_changed.connect(self._apply_theme)
+        self._apply_theme(theme_manager.get_theme())
+
+    # ==================== 结果卡片工厂 ====================
+
+    def _make_result_card(self, icon: str, title: str) -> tuple[QFrame, QLabel, QLabel]:
+        card = QFrame()
+        card.setObjectName("ResultCard")
+        card.setMinimumHeight(72)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 10, 16, 10)
+        layout.setSpacing(2)
+
+        header = QHBoxLayout()
+        header.setSpacing(4)
+        icon_lbl = QLabel(icon)
+        header.addWidget(icon_lbl)
+        title_lbl = QLabel(title)
+        title_lbl.setFont(get_font("Regular", 10))
+        title_lbl.setObjectName("resultTitle")
+        header.addWidget(title_lbl)
+        header.addStretch()
+        layout.addLayout(header)
+
+        value_lbl = QLabel("--")
+        value_lbl.setFont(get_font("Bold", 18))
+        value_lbl.setObjectName("resultValue")
+        layout.addWidget(value_lbl)
+
+        sub_lbl = QLabel("")
+        sub_lbl.setFont(get_font("Regular", 9))
+        sub_lbl.setObjectName("resultSub")
+        layout.addWidget(sub_lbl)
+
+        return card, value_lbl, sub_lbl
+
+    # ==================== 公共接口 ====================
+
+    def get_plan(self) -> tuple:
+        """返回 (schedule_list[7], start_date_iso)"""
+        return (list(self._schedule), self._start_date_iso)
+
+    def set_data(self, schedule: list, start_date_iso: str,
+                 balance_hours: float = 0.0, is_completed: bool = False,
+                 estimated_finish: str = "--"):
+        """更新卡片只读展示数据"""
+        self._schedule = [float(v) for v in schedule]
+        self._start_date_iso = start_date_iso
+        self._balance_hours = balance_hours
+        self._is_completed = is_completed
+        self._estimated_finish = estimated_finish
+
+        # 更新日期显示
+        if start_date_iso:
+            try:
+                d = datetime.fromisoformat(start_date_iso).date()
+                # 中文日期格式
+                self.date_display.setText(f"📅 开始日期：{d.year}年{d.month}月{d.day}日")
+            except (ValueError, TypeError):
+                self.date_display.setText("📅 开始日期：未设置")
+        else:
+            self.date_display.setText("📅 开始日期：未设置")
+
+        # 更新每日进度条
+        for i, hours in enumerate(self._schedule):
+            bar_val = min(int(hours * 10), 120)
+            self._day_bars[i].setValue(bar_val)
+            h = self._schedule[i]
+            self._day_value_labels[i].setText(
+                f"{int(h)}h" if h == int(h) else f"{h:.1f}h"
+            )
+
+        # 更新每周合计
+        weekly = sum(self._schedule)
+        self.weekly_total_label.setText(f"📊 每周合计：{weekly:.1f} 小时")
+
+        # 更新结果卡片和建议
+        self._update_result_cards()
+        self._update_suggestion()
+
+    # ==================== 编辑弹窗 ====================
+
+    def _on_change_clicked(self):
+        """打开更改学习计划弹窗"""
+        dialog = PlanEditDialog(self._schedule, self._start_date_iso, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            new_schedule, new_date = dialog.get_plan()
+            self.plan_changed.emit(new_schedule, new_date)
+
+    # ==================== 结果卡片 ====================
+
+    def _update_result_cards(self):
+        theme = theme_manager.get_theme()
+        weekly = sum(self._schedule)
+
+        if self._is_completed:
+            self._result_finish_value.setText("已完成")
+            self._result_finish_sub.setText("🎉 所有视频已学完")
+        elif not self._start_date_iso or weekly < 0.01:
+            self._result_finish_value.setText("--")
+            self._result_finish_sub.setText("设置日期和目标后可查看")
+        else:
+            self._result_finish_value.setText(self._estimated_finish)
+            try:
+                finish_dt = datetime.fromisoformat(self._estimated_finish).date()
+                remaining = (finish_dt - date.today()).days
+                if remaining > 0:
+                    self._result_finish_sub.setText(f"剩余约 {remaining} 天")
+                elif remaining == 0:
+                    self._result_finish_sub.setText("预计今日完成")
+                else:
+                    self._result_finish_sub.setText("已超出预计日期")
+            except (ValueError, TypeError):
+                self._result_finish_sub.setText("")
+
+        self._result_finish_value.setStyleSheet(
+            f"color: {theme['text_main']}; font-weight: bold; font-size: 18px;"
+            f"background: transparent; border: none;"
+        )
+
+        if self._is_completed:
+            self._result_balance_value.setText("已完成")
+            self._result_balance_sub.setText("🎉 恭喜完成课程")
+            bal_color = "#4CAF50"
+        elif not self._start_date_iso or weekly < 0.01:
+            self._result_balance_value.setText("--")
+            self._result_balance_sub.setText("设置日期和目标后可查看")
+            bal_color = theme["text_sec"]
+        else:
+            sign = "+" if self._balance_hours >= 0 else ""
+            self._result_balance_value.setText(f"{sign}{self._balance_hours:.1f}h")
+            if self._balance_hours >= 0:
+                self._result_balance_sub.setText("超前于计划")
+                bal_color = "#4CAF50"
+            elif self._balance_hours > -1:
+                self._result_balance_sub.setText("接近计划")
+                bal_color = theme["accent"]
+            else:
+                self._result_balance_sub.setText("落后于计划")
+                bal_color = theme["danger"]
+
+        self._result_balance_value.setStyleSheet(
+            f"color: {bal_color}; font-weight: bold; font-size: 18px;"
+            f"background: transparent; border: none;"
+        )
+
+    # ==================== 学习建议 ====================
+
+    def _update_suggestion(self):
+        weekly = sum(self._schedule)
+
+        if self._is_completed:
+            self.suggestion_label.setText("🎉 恭喜完成！可以开始新课程了")
+        elif not self._start_date_iso:
+            self.suggestion_label.setText("💡 请点击「更改学习计划」设置开始日期和目标")
+        elif weekly < 0.01:
+            self.suggestion_label.setText("💡 请点击「更改学习计划」设置每周学习时长")
+        elif self._balance_hours < -5:
+            try:
+                start_dt = datetime.fromisoformat(self._start_date_iso).date()
+                elapsed = max(1, (date.today() - start_dt).days)
+                extra_per_week = abs(self._balance_hours) / elapsed * 7
+                self.suggestion_label.setText(
+                    f"⚠ 落后较多，建议每周多学 {extra_per_week:.1f}h 可赶上")
+            except (ValueError, TypeError):
+                self.suggestion_label.setText("⚠ 落后较多，请检查学习节奏")
+        elif self._balance_hours < -1:
+            self.suggestion_label.setText("📌 稍有落后，保持当前节奏即可追上")
+        elif self._balance_hours < 0:
+            self.suggestion_label.setText("👍 接近计划，继续加油")
+        else:
+            self.suggestion_label.setText("✅ 超前于计划，保持节奏！")
+
+    # ==================== 主题 ====================
+
+    def _apply_theme(self, theme: dict):
+        self.setStyleSheet(f"""
+            #StudyPlanCard {{
+                background-color: {theme['bg_sec']};
+                border: 1px solid {theme['border']};
+                border-radius: 12px;
+            }}
+            QLabel#planTitle {{
+                color: {theme['text_main']}; background: transparent; border: none;
+                font-weight: bold; font-size: 13px;
+            }}
+            QLabel#dateDisplay {{
+                color: {theme['text_sec']}; background: transparent; border: none;
+                font-size: 12px;
+            }}
+            QLabel#dayBarName {{
+                color: {theme['text_sec']}; background: transparent; border: none;
+                font-size: 10px;
+            }}
+            QLabel#dayBarValue {{
+                color: {theme['text_main']}; background: transparent; border: none;
+                font-size: 12px;
+            }}
+            QLabel#weeklyTotal {{
+                color: {theme['text_sec']}; background: transparent; border: none;
+                font-size: 12px;
+            }}
+            QLabel#suggestionLabel {{
+                color: {theme['text_sec']}; background: transparent; border: none;
+                font-style: italic; padding-top: 4px; font-size: 10px;
+            }}
+            QFrame#DailyBarsContainer {{
+                background-color: {theme['bg_ter']};
+                border: 1px solid {theme['border']};
+                border-radius: 10px;
+            }}
+            QFrame#ResultCard {{
+                background-color: {theme['bg_ter']};
+                border: 1px solid {theme['border']};
+                border-radius: 10px;
+            }}
+            QLabel#resultTitle {{
+                color: {theme['text_sec']}; background: transparent; border: none;
+            }}
+            QLabel#resultValue {{
+                background: transparent; border: none;
+            }}
+            QLabel#resultSub {{
+                color: {theme['text_sec']}; background: transparent; border: none;
+            }}
+        """)
+
+        # 每日进度条样式
+        bar_qss = f"""
+            QProgressBar {{
+                background-color: {theme['bg_main']};
+                border: none;
+                border-radius: 5px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {theme['accent']};
+                border-radius: 5px;
+            }}
+        """
+        for bar in self._day_bars:
+            bar.setStyleSheet(bar_qss)
+
+        # 更改按钮
+        self.btn_change.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {theme['bg_ter']};
+                color: {theme['accent']};
+                border: 1px solid {theme['accent']};
+                border-radius: 8px;
+                padding: 4px 16px;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                background-color: {theme['accent']};
+                color: white;
+            }}
+        """)
+
+        self._update_result_cards()
+
+# ==================== 课程看板主视图 ====================
+
+class PropertiesView(QWidget):
+    """课程看板"""
+
+    def __init__(self, controller, parent=None):
+        super().__init__(parent)
+        self.controller = controller
+        self._course_id = None
+        self._refreshing = False
+
         outer_layout = QVBoxLayout(self)
-        outer_layout.setContentsMargins(0,0,0,0)
-        
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-        # Hide scrollbar if not needed? No, auto.
-        
+
         self.container = QWidget()
         self.layout = QVBoxLayout(self.container)
-        self.layout.setContentsMargins(30, 30, 30, 30) # Generous margins
-        self.layout.setSpacing(25) # Card spacing
-        
+        self.layout.setContentsMargins(30, 30, 30, 30)
+        self.layout.setSpacing(20)
+
         self.scroll_area.setWidget(self.container)
         outer_layout.addWidget(self.scroll_area)
-        
-        # Heatmap Card
-        self.heatmap = CourseHeatMap()
-        self.layout.addWidget(self.heatmap)
-        
-        # Stats Card
-        self.stats = StatsPanel()
-        self.stats.start_date_changed.connect(self.on_start_date_changed)
-        self.layout.addWidget(self.stats)
-        
-        # Schedule Card
-        self.schedule = WeeklyScheduleWidget()
-        self.schedule.schedule_changed.connect(self.save_schedule_and_recalc)
-        self.layout.addWidget(self.schedule)
-        
+
+        # 第 1 行：4 张统计卡片
+        self.stats_row = StatsRow()
+        self.layout.addWidget(self.stats_row)
+
+        # 第 2 行：学习计划卡片（日期 + 周计划 + 建议）
+        self.study_plan = StudyPlanCard()
+        self.study_plan.plan_changed.connect(self._on_plan_changed)
+        self.layout.addWidget(self.study_plan)
+
+        # 第 3 行：学习时间线（纯可视化）
+        self.timeline = CourseTimeline()
+        self.layout.addWidget(self.timeline)
+
         self.layout.addStretch()
-        
-        theme_manager.theme_changed.connect(self.apply_theme)
-        self.apply_theme(theme_manager.get_theme())
-        
-    def load_course(self, course_id):
-        self.course_id = course_id
-        course = self.dm.get_course_by_id(course_id)
-        if not course: return
-        
-        # Load Schedule
-        sched = course.get("weekly_schedule", [0]*7)
-        self.schedule.set_schedule(sched)
-        
-        start_date = course.get("start_date")
-        self.stats.set_start_date(start_date)
-        
-        # Refresh Logic
-        self.recalc_stats()
 
-    def on_start_date_changed(self, new_date_iso):
-        if not self.course_id: return
-        course = self.dm.get_course_by_id(self.course_id)
-        current_sched = course.get("weekly_schedule", [0]*7)
-        self.dm.set_weekly_schedule(self.course_id, current_sched, new_date_iso)
-        self.recalc_stats()
+        theme_manager.theme_changed.connect(self._apply_theme)
+        self._apply_theme(theme_manager.get_theme())
 
-    def save_schedule_and_recalc(self):
-        if not self.course_id: return
-        data = self.schedule.get_schedule()
-        date_iso = self.stats.date_edit.date().toString(Qt.DateFormat.ISODate)
-        self.dm.set_weekly_schedule(self.course_id, data, date_iso)
-        self.recalc_stats()
+    def set_course_id(self, course_id: str):
+        self._course_id = course_id
 
-    def recalc_stats(self):
-        course = self.dm.get_course_by_id(self.course_id)
-        
-        # Basic Stats
-        total_v = course.get("total_videos", 0)
-        done_v = sum(1 for v in course["videos"] if v.get("completed"))
-        total_h = course.get("total_duration", 0) / 3600
-        done_h = sum(v.get("watched_duration", 0) for v in course["videos"]) / 3600
-        remaining_h = total_h - done_h
-        
-        today_s = self.dm.get_today_progress(self.course_id)
-        today_h = today_s / 3600
-        
-        # Plan Stats
-        bal, act_min, plan_min = self.dm.get_course_balance(self.course_id)
-        
-        sched = course.get("weekly_schedule", [0]*7)
-        wd = datetime.now().weekday()
-        plan_today_h = sched[wd]
-        
-        # Calculate Finish Date
-        finish_date_str = "--"
-        if remaining_h > 0 and sum(sched) > 0:
-            sim_date = date.today()
-            needed = remaining_h
-            if sum(sched) > 0.1: 
-                days_count = 0
-                while needed > 0 and days_count < 365*5:
-                    day_wd = sim_date.weekday()
-                    day_plan = sched[day_wd]
-                    needed -= day_plan
-                    if needed > 0:
-                        sim_date += timedelta(days=1)
-                    days_count += 1
-                finish_date_str = sim_date.strftime("%Y-%m-%d")
-        elif remaining_h <= 0:
-            finish_date_str = "已完成"
-            
-        self.stats.update_stats(bal/60, done_v, total_v, done_h, total_h, today_h, plan_today_h, finish_date_str)
-        
-        # Heatmap
-        data = course.get("daily_stats", {})
-        self.heatmap.set_data(data, plan_today_h) 
+    def load_course(self, course_id: str):
+        self._course_id = course_id
+        self._refresh_all()
 
-    def apply_theme(self, theme):
+    def _refresh_all(self):
+        if not self._course_id or self._refreshing:
+            return
+        self._refreshing = True
+        try:
+            data = self.controller.get_dashboard_data(self._course_id)
+
+            self.stats_row.update_stats(
+                progress=(
+                    f"{data.completed_videos}/{data.total_videos}",
+                    f"{data.total_videos - data.completed_videos} 个待完成",
+                    int(data.completed_videos / max(1, data.total_videos) * 100),
+                ),
+                duration=(
+                    f"{data.watched_hours:.1f}h",
+                    f"共 {data.total_hours:.1f}h",
+                    int(data.watched_hours / max(0.01, data.total_hours) * 100),
+                ),
+                today=(
+                    f"{data.today_hours:.1f}h",
+                    f"计划 {data.plan_today_hours:.1f}h",
+                    int(data.today_hours / max(0.01, data.plan_today_hours) * 100) if data.plan_today_hours > 0 else 0,
+                ),
+                balance=(
+                    f"+{data.balance_hours:.1f}h" if data.balance_hours >= 0 else f"{data.balance_hours:.1f}h",
+                    "超前于计划" if data.balance_hours >= 0 else "落后于计划",
+                    -1,
+                ),
+            )
+            theme = theme_manager.get_theme()
+            bal_color = "#4CAF50" if data.balance_hours >= 0 else theme["danger"]
+            self.stats_row.cards["balance"].value_label.setStyleSheet(
+                f"color: {bal_color}; font-size: 20px; font-weight: bold; background: transparent; border: none;")
+
+            # 学习计划卡片 - blockSignals 防循环
+            is_completed = (data.estimated_finish_str == "已完成")
+            self.study_plan.blockSignals(True)
+            self.study_plan.set_data(
+                data.weekly_schedule,
+                data.start_date_iso or "",
+                data.balance_hours,
+                is_completed,
+                data.estimated_finish_str,
+            )
+            self.study_plan.blockSignals(False)
+
+            # 时间线（纯可视化，无需 blockSignals）
+            self.timeline.set_data(
+                start_date_iso=data.start_date_iso,
+                estimated_finish=data.estimated_finish_str,
+                balance_hours=data.balance_hours,
+                progress_pct=int(data.completed_videos / max(1, data.total_videos) * 100),
+                total_videos=data.total_videos,
+                completed_videos=data.completed_videos,
+            )
+        finally:
+            self._refreshing = False
+
+    def _on_plan_changed(self, schedule: list, start_date_iso: str):
+        """统一处理：StudyPlanCard 中日期或周计划变更"""
+        if not self._course_id or self._refreshing:
+            return
+        self.controller.set_weekly_schedule(self._course_id, schedule, start_date_iso)
+        self._refresh_all()
+
+    def _apply_theme(self, theme):
         self.setStyleSheet(f"background-color: {theme['bg_main']};")
-        self.scroll_area.setStyleSheet("border: none;")
-        self.container.setStyleSheet(f"background-color: {theme['bg_main']};")
+        # scroll_area 的 viewport 必须在 frame 之下保持透明
+        vp = self.scroll_area.viewport()
+        vp.setStyleSheet(f"background-color: transparent;")
+        self.scroll_area.setStyleSheet(
+            self._scrollbar_qss().replace(
+                "QScrollArea {",
+                f"QScrollArea {{ border: none; background-color: {theme['bg_main']}; "
+                f"border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; "))
+        self.container.setStyleSheet(f"background-color: transparent;")
+
+    def _scrollbar_qss(self) -> str:
+        theme = theme_manager.get_theme()
+        return f"""
+            QScrollArea {{ border: none; background-color: transparent; }}
+            QScrollBar:vertical {{
+                background: transparent; width: 4px; margin: 0px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {theme['accent']}; min-height: 20px; border-radius: 2px; margin: 0px;
+            }}
+            QScrollBar::handle:vertical:hover {{ background: {theme['accent']}; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
+        """

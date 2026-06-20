@@ -1,2 +1,3 @@
-PySide6
+PySide6>=6.5
 tinytag
+python-vlc  # 可选：VLC 播放引擎，未安装时自动降级为 Qt Multimedia

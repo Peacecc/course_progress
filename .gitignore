@@ -1,3 +1,17 @@
 app/controllers/__pycache__/main_controller.cpython-312.pyc
 app/services/player/C/player_service.cpython-312.pyc
 __pycache__
+debug/check_conflict.py
+debug/check_font_name.py
+debug/debug_env.py
+debug/detect_vlc.py
+debug/find_qt_dll.py
+debug/fix_dll_import_v2.py
+debug/fix_dll_import_v3.py
+debug/fix_dll_import.py
+debug/test_fix.py
+debug/test_qt.py
+debug/verify_app_bar.py
+debug/
+data/
+sdk/

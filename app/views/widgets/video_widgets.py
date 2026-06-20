@@ -1,36 +1,48 @@
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+"""VideoWidgets — 视频播放相关组件，包含视频项、章节列表和省略号标签"""
+
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QFrame, QSizePolicy)
 from PySide6.QtCore import Qt, Signal, QSize, QPropertyAnimation, QEasingCurve, QRect
 from PySide6.QtGui import QColor, QIcon, QCursor, QFontMetrics, QPainter
 from  services.theme_service import theme_service as theme_manager
 
+
 class ElidedLabel(QLabel):
+    """自适应省略文本标签 — 宽度不足时以省略号结尾，完整文本在 tooltip 中展示"""
+
     def __init__(self, text="", parent=None):
         super().__init__(text, parent)
-        self._elided_text = text
+        self._full_text = text
+        self.setToolTip(text)
+        # 确保 label 有合理的尺寸策略
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
     def setText(self, text):
-        self._elided_text = text
+        self._full_text = text
         self.setToolTip(text)
         super().setText(text)
         self.update()
 
     def minimumSizeHint(self):
-        # 核心：返回极小的最小尺寸提示，允许布局将其压缩
-        return QSize(20, self.fontMetrics().height())
+        fm = self.fontMetrics()
+        # 至少能显示 3 个中文字符（约 3 * 字宽）+ padding
+        min_chars_width = fm.horizontalAdvance("啊啊啊")
+        return QSize(min_chars_width + 8, fm.height() + 8)
 
     def sizeHint(self):
-        # 提供一个合理的建议宽度，但允许被压缩
-        return QSize(100, self.fontMetrics().height())
+        fm = self.fontMetrics()
+        ideal = fm.horizontalAdvance(self._full_text) + 16
+        # 限制理想宽度，避免过长
+        return QSize(min(ideal, 300), fm.height() + 8)
 
     def paintEvent(self, event):
         painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         metrics = QFontMetrics(self.font())
-        # 确保计算省略文本时考虑当前标签宽度
-        elided = metrics.elidedText(self._elided_text, Qt.TextElideMode.ElideRight, self.width())
+        elided = metrics.elidedText(self._full_text, Qt.TextElideMode.ElideRight, self.width() - 6)
         painter.setPen(self.palette().color(self.foregroundRole()))
-        # 垂直居中绘制内容
-        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided)
+        painter.drawText(self.rect().adjusted(3, 2, -3, -2),
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided)
 
 class VideoItemWidget(QFrame):
     clicked = Signal(object) # video_data
